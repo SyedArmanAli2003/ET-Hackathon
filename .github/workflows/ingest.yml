@@ -1,0 +1,145 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Air Quality Ingestion Pipeline
+#
+# Triggers:
+#   • schedule  — every 5 hours (cron)
+#   • workflow_dispatch — manual trigger from the GitHub Actions UI,
+#                         with optional `hours` and `skip_stations` inputs
+#
+# Secrets required (set in repo Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL   — full PostgreSQL connection string
+#   OPENAQ_API_KEY    — OpenAQ v3 API key (get one free at openaq.org)
+#
+# Caching:
+#   pip packages are cached by the hash of ingestion/requirements.txt so
+#   unchanged dependency sets never re-download packages.
+# ──────────────────────────────────────────────────────────────────────────────
+
+name: Air Quality Ingestion
+
+on:
+  # Run every 5 hours.  GitHub cron uses UTC.
+  # Minute offset (17) avoids the :00 rush shared by many public workflows.
+  schedule:
+    - cron: "17 */5 * * *"
+
+  # Manual trigger — useful for testing or forcing a backfill.
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Look-back window in hours (default: 24)"
+        required: false
+        default: "24"
+        type: string
+      skip_stations:
+        description: "Skip the stations sync step"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      dry_run:
+        description: "Fetch data but do NOT write to the database"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+# Cancel any in-progress run for the same branch so two runs never write
+# to the DB simultaneously (important for the unique-constraint guarantees).
+concurrency:
+  group: ingestion-pipeline
+  cancel-in-progress: false   # let the current run finish; queue the next
+
+jobs:
+  ingest:
+    name: Run ingestion pipeline
+    runs-on: ubuntu-latest
+
+    # Fail the job if any step exits non-zero, but note that run_ingestion.py
+    # exits 1 only when a step *fails* (not when rows are skipped as duplicates).
+    # See the script's main() for details.
+
+    steps:
+      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ────────────────────────────────────────────────────
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # ── 3. Restore / prime pip cache ─────────────────────────────────────────
+      # Cache key is the OS + the exact content hash of requirements.txt.
+      # Any change to requirements.txt busts the cache automatically.
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        id: pip-cache
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('ingestion/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # ── 4. Install dependencies ──────────────────────────────────────────────
+      - name: Install Python dependencies
+        run: pip install -r ingestion/requirements.txt
+
+      # ── 5. Create .env from secrets ─────────────────────────────────────────
+      # We write a real .env file so that python-dotenv in run_ingestion.py
+      # picks it up exactly as it does in local development.
+      # The file is never committed — it is created at runtime only.
+      - name: Create ingestion/.env from secrets
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          OPENAQ_API_KEY:  ${{ secrets.OPENAQ_API_KEY }}
+        run: |
+          cat > ingestion/.env <<EOF
+          SUPABASE_DB_URL=${SUPABASE_DB_URL}
+          OPENAQ_API_KEY=${OPENAQ_API_KEY}
+          EOF
+
+      # ── 6. Build the CLI flags ───────────────────────────────────────────────
+      # For scheduled runs, use defaults (hours=24, no skips, no dry-run).
+      # For manual runs, honour the workflow_dispatch inputs.
+      - name: Build CLI flags
+        id: flags
+        run: |
+          HOURS="${{ github.event.inputs.hours || '24' }}"
+          SKIP_STATIONS="${{ github.event.inputs.skip_stations || 'false' }}"
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+
+          FLAGS="--hours ${HOURS}"
+          [ "${SKIP_STATIONS}" = "true" ] && FLAGS="${FLAGS} --skip-stations"
+          [ "${DRY_RUN}"       = "true" ] && FLAGS="${FLAGS} --dry-run"
+
+          echo "flags=${FLAGS}" >> "$GITHUB_OUTPUT"
+          echo "Resolved flags: ${FLAGS}"
+
+      # ── 7. Run the ingestion pipeline ───────────────────────────────────────
+      - name: Run ingestion pipeline
+        run: python ingestion/run_ingestion.py ${{ steps.flags.outputs.flags }}
+        env:
+          # Pass secrets as env vars too — belt-and-suspenders for any code
+          # path that reads os.getenv() directly instead of via .env.
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          OPENAQ_API_KEY:  ${{ secrets.OPENAQ_API_KEY }}
+          LOG_LEVEL: INFO
+
+      # ── 8. Upload logs on failure ─────────────────────────────────────────
+      # If the pipeline exits 1 (a step failed), capture the runner logs so
+      # you can download them from the Actions UI without re-running.
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingestion-failure-logs-${{ github.run_id }}
+          path: |
+            ingestion/*.log
+          retention-days: 7
+          if-no-files-found: ignore
