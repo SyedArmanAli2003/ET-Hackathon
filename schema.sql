@@ -129,8 +129,8 @@ CREATE INDEX idx_weather_station_time
 
 -- =============================================================================
 -- 4. FORECASTS
---    Model-generated AQI predictions, one row per station × future timestamp
---    × model run.
+--    Model-generated AQI predictions, one row per station x future timestamp
+--    x model run.
 -- =============================================================================
 CREATE TABLE forecasts (
     id               UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -139,18 +139,24 @@ CREATE TABLE forecasts (
     forecast_at      TIMESTAMPTZ   NOT NULL,  -- the future moment being predicted
     predicted_aqi    NUMERIC(6, 2) NOT NULL,
     model_version    TEXT          NOT NULL,  -- e.g. 'xgb-v2.1', 'lstm-v3.0'
+    horizon_hours    INTEGER       NOT NULL DEFAULT 6,  -- prediction window in hours (1, 6, 24)
     model_rmse       NUMERIC(8, 4),           -- model RMSE for this run
-    baseline_rmse    NUMERIC(8, 4),           -- naïve baseline RMSE for comparison
+    baseline_rmse    NUMERIC(8, 4),           -- naive baseline RMSE for comparison
     created_at       TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
 
--- UNIQUE constraint: one predicted value per station + future timestamp + model version;
--- prevents duplicate forecast rows when a model run is replayed.
+-- Prevent nonsensical horizon values
 ALTER TABLE forecasts
-    ADD CONSTRAINT uq_forecasts_station_forecast_model UNIQUE (station_id, forecast_at, model_version);
+    ADD CONSTRAINT chk_forecasts_horizon_hours CHECK (horizon_hours > 0);
 
--- Composite index: enables fast retrieval of future forecasts for a specific
--- station ordered chronologically (e.g. "next 48 h outlook for station X").
+-- UNIQUE constraint: one predicted value per station x target timestamp x model x horizon.
+-- Allows same station+forecast_at to have both 6h and 24h rows from the same model version.
+-- Prevents duplicates when a model run is replayed.
+ALTER TABLE forecasts
+    ADD CONSTRAINT uq_forecasts_station_forecast_model_horizon
+        UNIQUE (station_id, forecast_at, model_version, horizon_hours);
+
+-- Composite index for frontend query: .eq('station_id', x).eq('horizon_hours', 6).order('forecast_at')
 CREATE INDEX idx_forecasts_station_time
     ON forecasts (station_id, forecast_at ASC);
 
