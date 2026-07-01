@@ -90,19 +90,13 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r ingestion/requirements.txt
 
-      # ── 5. Create .env from secrets ─────────────────────────────────────────
-      # We write a real .env file so that python-dotenv in run_ingestion.py
-      # picks it up exactly as it does in local development.
-      # The file is never committed — it is created at runtime only.
-      - name: Create ingestion/.env from secrets
-        env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          OPENAQ_API_KEY:  ${{ secrets.OPENAQ_API_KEY }}
-        run: |
-          cat > ingestion/.env <<EOF
-          SUPABASE_DB_URL=${SUPABASE_DB_URL}
-          OPENAQ_API_KEY=${OPENAQ_API_KEY}
-          EOF
+      # ── 5. Environment variables from GitHub secrets ────────────────────────
+      # SUPABASE_DB_URL and OPENAQ_API_KEY are passed directly as env vars in
+      # step 7 below. No .env file is written to the runner filesystem, which
+      # avoids leaking secrets into logs or artifacts if the runner is
+      # compromised.
+      # python-dotenv is still available for local development but in CI the
+      # ingest scripts read os.getenv() which will find the env vars directly.
 
       # ── 6. Build the CLI flags ───────────────────────────────────────────────
       # For scheduled runs, use defaults (hours=24, no skips, no dry-run).

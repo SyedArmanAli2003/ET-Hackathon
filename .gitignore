@@ -1,5 +1,6 @@
 ingestion/.env
-.agents\skills
-model/__pycache__/features.cpython-314.pyc
+.agents/skills
 skills-lock.json
-model/__pycache__/split.cpython-314.pyc
+**/__pycache__/
+*.pyc
+model/artifacts/*.pkl

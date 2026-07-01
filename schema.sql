@@ -8,6 +8,42 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 
 -- =============================================================================
+-- APPLICATION DATABASE USER (least privilege)
+-- Never connect as the postgres superuser from application code.
+-- This role has only the bare minimum privileges for the ingestion pipeline.
+-- ─────────────────────────────────────────────────────────────────────────────
+-- To set a password, run:
+--   ALTER ROLE app_ingestion WITH PASSWORD '<secure-password>';
+-- Then set SUPABASE_DB_URL to:
+--   postgresql://app_ingestion:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+-- =============================================================================
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app_ingestion') THEN
+        CREATE ROLE app_ingestion WITH LOGIN PASSWORD NULL
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+    END IF;
+END
+$$;
+
+GRANT USAGE ON SCHEMA public TO app_ingestion;
+
+GRANT SELECT, INSERT, UPDATE ON TABLE public.stations TO app_ingestion;
+GRANT SELECT, INSERT ON TABLE public.readings TO app_ingestion;
+GRANT SELECT, INSERT ON TABLE public.weather TO app_ingestion;
+GRANT SELECT, INSERT ON TABLE public.forecasts TO app_ingestion;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.user_profiles TO app_ingestion;
+
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO app_ingestion;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE ON TABLES TO app_ingestion;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT USAGE ON SEQUENCES TO app_ingestion;
+
+
+-- =============================================================================
 -- 1. STATIONS
 --    Master table of monitoring station locations.
 --    All other tables reference this one.
@@ -138,3 +174,86 @@ CREATE TABLE user_profiles (
 -- so this avoids full-table scans on every personalisation request.
 CREATE INDEX idx_user_profiles_session
     ON user_profiles (session_id);
+
+-- Index on the FK to stations: avoids sequential scans when joining
+-- user_profiles to stations for the preferred_station relationship.
+CREATE INDEX idx_user_profiles_preferred_station
+    ON user_profiles (preferred_station);
+
+
+-- =============================================================================
+-- 6. ROW-LEVEL SECURITY  (defense-in-depth for the Supabase Data API)
+--    All tables are exposed to the Supabase REST/GraphQL API, so RLS prevents
+--    unauthorised access if the anon key is compromised.
+--    The backend ingestion pipeline bypasses RLS because it connects with
+--    full database credentials via a dedicated SQLAlchemy connection.
+-- =============================================================================
+
+-- ── Enable RLS on every table ─────────────────────────────────────────────────
+ALTER TABLE stations       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE readings       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE weather        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE forecasts      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_profiles  ENABLE ROW LEVEL SECURITY;
+
+-- ── Stations: public reference data — anyone can read; only service_role writes
+CREATE POLICY "stations_select_anon" ON stations
+    FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "stations_insert_service" ON stations
+    FOR INSERT TO service_role WITH CHECK (true);
+
+CREATE POLICY "stations_update_service" ON stations
+    FOR UPDATE TO service_role USING (true) WITH CHECK (true);
+
+-- ── Readings: public air quality data — anyone can read; only service_role writes
+CREATE POLICY "readings_select_anon" ON readings
+    FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "readings_insert_service" ON readings
+    FOR INSERT TO service_role WITH CHECK (true);
+
+-- ── Weather: public weather data — anyone can read; only service_role writes
+CREATE POLICY "weather_select_anon" ON weather
+    FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "weather_insert_service" ON weather
+    FOR INSERT TO service_role WITH CHECK (true);
+
+-- ── Forecasts: public prediction data — anyone can read; only service_role writes
+CREATE POLICY "forecasts_select_anon" ON forecasts
+    FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "forecasts_insert_service" ON forecasts
+    FOR INSERT TO service_role WITH CHECK (true);
+
+-- ── User profiles: session_id is PII — only the owning session can access
+-- NOTE: current_setting() is wrapped in (SELECT ...) to avoid per-row
+-- re-evaluation (Supabase performance best practice for RLS init plans).
+CREATE POLICY "user_profiles_select_own" ON user_profiles
+    FOR SELECT TO anon, authenticated
+    USING (
+        session_id = (SELECT current_setting('request.jwt.claims', true)::json->>'session_id')
+        OR current_user = 'service_role'
+    );
+
+CREATE POLICY "user_profiles_insert_own" ON user_profiles
+    FOR INSERT TO anon, authenticated
+    WITH CHECK (
+        session_id = (SELECT current_setting('request.jwt.claims', true)::json->>'session_id')
+        OR current_user = 'service_role'
+    );
+
+CREATE POLICY "user_profiles_update_own" ON user_profiles
+    FOR UPDATE TO anon, authenticated
+    USING (
+        session_id = (SELECT current_setting('request.jwt.claims', true)::json->>'session_id')
+        OR current_user = 'service_role'
+    )
+    WITH CHECK (
+        session_id = (SELECT current_setting('request.jwt.claims', true)::json->>'session_id')
+        OR current_user = 'service_role'
+    );
+
+CREATE POLICY "user_profiles_delete_service" ON user_profiles
+    FOR DELETE TO service_role USING (true);

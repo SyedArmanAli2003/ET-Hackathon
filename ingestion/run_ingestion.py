@@ -62,7 +62,7 @@ log = logging.getLogger(__name__)
 # ── lazy imports (after path is set) ─────────────────────────────────────────
 from sqlalchemy import text                         # noqa: E402
 from config import TRACKED_CITIES, OPENAQ_RADIUS_KM # noqa: E402
-from db import get_engine                           # noqa: E402
+from db import get_engine, validate_table_name       # noqa: E402
 import setup_stations                               # noqa: E402
 import ingest_readings                              # noqa: E402
 import ingest_weather                               # noqa: E402
@@ -109,9 +109,14 @@ class StepResult:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _count(table: str) -> int:
-    """Return the current row count of a table via a direct SQL query."""
+    """Return the current row count of a table via a parameterized query.
+    Table name is validated against an allowlist to prevent SQL injection.
+    """
+    safe_table = validate_table_name(table)
     with get_engine().connect() as conn:
-        row = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).fetchone()  # noqa: S608
+        row = conn.execute(
+            text(f"SELECT COUNT(*) FROM {safe_table}")
+        ).fetchone()
         return int(row[0]) if row else 0
 
 

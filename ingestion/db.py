@@ -18,6 +18,7 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 load_dotenv()  # fallback to CWD
 
 _engine: Engine | None = None
+_ALLOWED_TABLES = frozenset({"stations", "readings", "weather", "forecasts", "user_profiles"})
 
 
 def get_engine() -> Engine:
@@ -30,9 +31,13 @@ def get_engine() -> Engine:
                 "SUPABASE_DB_URL is not set. "
                 "Copy ingestion/.env.template to ingestion/.env and fill in your connection string."
             )
+        # Enforce SSL — add if not already present
+        if "sslmode" not in db_url:
+            sep = "&" if "?" in db_url else "?"
+            db_url = f"{db_url}{sep}sslmode=require"
         _engine = create_engine(
             db_url,
-            pool_pre_ping=True,       # drops stale connections before use
+            pool_pre_ping=True,
             pool_size=5,
             max_overflow=10,
             connect_args={"connect_timeout": 10},
@@ -45,15 +50,24 @@ def get_connection():
     return get_engine().connect()
 
 
+def validate_table_name(name: str) -> str:
+    """Validate table name against the allowlist to prevent SQL injection."""
+    if name not in _ALLOWED_TABLES:
+        raise ValueError(
+            f"Invalid table name: '{name}'. Allowed: {sorted(_ALLOWED_TABLES)}"
+        )
+    return name
+
+
 def verify_connection() -> bool:
     """Smoke-test the database connection. Returns True on success."""
     try:
         with get_connection() as conn:
             conn.execute(text("SELECT 1"))
-        print("✅  Database connection OK")
+        print("[OK]  Database connection OK")
         return True
-    except Exception as exc:
-        print(f"❌  Database connection failed: {exc}")
+    except Exception:
+        print("[FAIL]  Database connection failed — check your credentials and network.")
         return False
 
 
