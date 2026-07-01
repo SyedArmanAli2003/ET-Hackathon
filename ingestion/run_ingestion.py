@@ -1,20 +1,25 @@
 """
 run_ingestion.py — Master orchestrator for the air quality ingestion pipeline.
 
-Runs three steps in sequence:
+Runs four steps in sequence:
   1. setup_stations  — sync monitoring stations from OpenAQ
   2. ingest_readings — fetch last N hours of PM2.5/AQI readings
   3. ingest_weather  — fetch last N hours of hourly weather
+  4. run_forecast    — load trained model artifacts, predict AQI at T+horizon,
+                       insert into forecasts (ON CONFLICT DO NOTHING)
 
 Each step is isolated in its own try/except block so a transient API outage
-(e.g. OpenAQ is briefly down) does not abort the remaining steps.
+or a missing model artifact for a single station does not abort the remaining
+steps. Stations with no trained artifact log a WARNING and are skipped
+gracefully inside model/predict.py; this wrapper only catches total failures
+(e.g. DB connection lost, corrupted artifact file).
 
 Counts are derived by querying the database BEFORE and AFTER each step, not
 from the individual scripts' log output, so they are exact even if a step
 partially succeeds.
 
 Usage:
-    # Full run (all three steps, last 24 h)
+    # Full run (all four steps, last 24 h, 6 h forecast horizon)
     python ingestion/run_ingestion.py
 
     # Change the look-back window for readings + weather
@@ -23,9 +28,13 @@ Usage:
     # Skip station setup (stations already seeded)
     python ingestion/run_ingestion.py --skip-stations
 
-    # Skip a step entirely
+    # Skip individual steps
     python ingestion/run_ingestion.py --skip-readings
     python ingestion/run_ingestion.py --skip-weather
+    python ingestion/run_ingestion.py --skip-forecast
+
+    # Change forecast horizon (requires trained artifacts for that horizon)
+    python ingestion/run_ingestion.py --forecast-horizon 24
 
     # Preview — no DB writes anywhere
     python ingestion/run_ingestion.py --dry-run
@@ -44,8 +53,11 @@ from enum import Enum
 from typing import Optional
 
 # ── path setup ────────────────────────────────────────────────────────────────
-_HERE = os.path.dirname(os.path.abspath(__file__))
+_HERE    = os.path.dirname(os.path.abspath(__file__))
+_ROOT    = os.path.dirname(_HERE)                      # repo root
+_MODEL   = os.path.join(_ROOT, "model")                # model/ directory
 sys.path.insert(0, _HERE)
+sys.path.insert(0, _MODEL)   # needed so predict.py can import features, db, etc.
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(_HERE, ".env"))
@@ -66,6 +78,8 @@ from db import get_engine, validate_table_name       # noqa: E402
 import setup_stations                               # noqa: E402
 import ingest_readings                              # noqa: E402
 import ingest_weather                               # noqa: E402
+# predict is imported lazily inside run_forecast() so a missing model
+# dependency (xgboost/lightgbm not installed) does not break the pipeline.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -130,7 +144,7 @@ def run_stations(dry_run: bool) -> StepResult:
     result.rows_before = _count("stations")
 
     log.info("=" * 60)
-    log.info("STEP 1/3  setup_stations")
+    log.info("STEP 1/4  setup_stations")
     log.info("=" * 60)
     t0 = time.monotonic()
 
@@ -157,7 +171,7 @@ def run_readings(hours: int, dry_run: bool) -> StepResult:
     result.rows_before = _count("readings")
 
     log.info("=" * 60)
-    log.info("STEP 2/3  ingest_readings  (last %d h)", hours)
+    log.info("STEP 2/4  ingest_readings  (last %d h)", hours)
     log.info("=" * 60)
     t0 = time.monotonic()
 
@@ -184,7 +198,7 @@ def run_weather(hours: int, dry_run: bool) -> StepResult:
     result.rows_before = _count("weather")
 
     log.info("=" * 60)
-    log.info("STEP 3/3  ingest_weather   (last %d h)", hours)
+    log.info("STEP 3/4  ingest_weather   (last %d h)", hours)
     log.info("=" * 60)
     t0 = time.monotonic()
 
@@ -206,19 +220,102 @@ def run_weather(hours: int, dry_run: bool) -> StepResult:
     return result
 
 
+def run_forecast(horizon: int, dry_run: bool) -> StepResult:
+    """
+    Step 4 — load trained model artifacts and insert AQI forecasts.
+
+    Fault-isolation contract
+    ------------------------
+    - Stations with no trained artifact log a WARNING and are skipped.
+      This is normal behaviour early in the project lifecycle (not every
+      city has a model yet). It is handled inside predict.py's run_inference()
+      and does NOT raise an exception — so this outer try/except only fires
+      on genuine infrastructure failures (DB down, corrupt artifact, OOM).
+    - If the entire step fails (e.g. DB unreachable), rows_after is snapped
+      from the DB so the summary table still shows the correct total.
+    """
+    result = StepResult(name="forecast")
+    result.rows_before = _count("forecasts")
+
+    log.info("=" * 60)
+    log.info("STEP 4/4  run_forecast     (horizon=%dh)", horizon)
+    log.info("=" * 60)
+    t0 = time.monotonic()
+
+    try:
+        # Lazy import so a missing xgboost/lightgbm install doesn't break
+        # the ingestion steps that ran before this one.
+        import predict as _predict   # model/predict.py (on sys.path via _MODEL)
+        import pandas as pd
+        from db import get_engine as _engine
+
+        engine = _engine()
+
+        # Load data (same loaders predict.py exposes internally)
+        readings = _predict._load_df(engine, """
+            SELECT r.station_id::text, s.city,
+                   r.timestamp AT TIME ZONE 'UTC' AS timestamp,
+                   r.aqi::float, r.pm25::float, r.data_source
+            FROM readings r JOIN stations s ON s.id = r.station_id
+            ORDER BY s.city, r.timestamp""")
+
+        weather = _predict._load_df(engine, """
+            SELECT w.station_id::text, s.city,
+                   w.timestamp AT TIME ZONE 'UTC' AS timestamp,
+                   w.temperature::float, w.wind_speed::float, w.humidity::float
+            FROM weather w JOIN stations s ON s.id = w.station_id
+            ORDER BY s.city, w.timestamp""")
+
+        from features import build_latest_features  # model/features.py
+        latest      = build_latest_features(readings, weather)
+        station_ids = _predict._load_station_ids(engine)
+
+        log.info("  Built latest features for %d station(s)", len(latest))
+
+        forecasts = _predict.run_inference(latest, "xgb", horizon, station_ids)
+
+        if not forecasts:
+            log.warning("  No forecasts produced — no artifacts found for horizon=%dh model=xgb."
+                        " Run model/train.py --horizon %d first.", horizon, horizon)
+            result.rows_after = _count("forecasts")
+            result.status = StepStatus.SUCCESS   # not a failure — just nothing to insert
+        elif dry_run:
+            log.info("  [dry-run] Would insert %d forecast row(s) — skipping DB write.",
+                     len(forecasts))
+            result.rows_after = _count("forecasts")
+            result.status = StepStatus.SUCCESS
+        else:
+            n_inserted = _predict.insert_forecasts(engine, forecasts)
+            result.rows_after = _count("forecasts")
+            result.status = StepStatus.SUCCESS
+            log.info("  Inserted %d / %d forecast(s)  (conflicts: %d DO NOTHING)",
+                     n_inserted, len(forecasts), len(forecasts) - n_inserted)
+
+    except Exception:
+        result.rows_after = _count("forecasts")
+        result.status = StepStatus.FAILED
+        result.error  = traceback.format_exc().strip().splitlines()[-1]
+        log.error("forecast step failed:\n%s", traceback.format_exc())
+
+    result.elapsed_s = time.monotonic() - t0
+    return result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Orchestrator
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run_pipeline(
-    hours:          int,
-    dry_run:        bool,
-    skip_stations:  bool,
-    skip_readings:  bool,
-    skip_weather:   bool,
+    hours:           int,
+    dry_run:         bool,
+    skip_stations:   bool,
+    skip_readings:   bool,
+    skip_weather:    bool,
+    skip_forecast:   bool = False,
+    forecast_horizon: int = 6,
 ) -> list[StepResult]:
     """
-    Execute up to three steps in order, collecting a StepResult for each.
+    Execute up to four steps in order, collecting a StepResult for each.
     Steps that are flagged as --skip-* are recorded as SKIPPED without running.
     A failed step does NOT prevent subsequent steps from running.
     """
@@ -258,6 +355,15 @@ def run_pipeline(
         r = run_weather(hours=hours, dry_run=dry_run)
     results.append(r)
 
+    # ── Step 4: forecast ───────────────────────────────────────────────────
+    if skip_forecast:
+        log.info("Skipping forecast step (--skip-forecast).")
+        r = StepResult(name="forecast", status=StepStatus.SKIPPED)
+        r.rows_after = _count("forecasts")
+    else:
+        r = run_forecast(horizon=forecast_horizon, dry_run=dry_run)
+    results.append(r)
+
     # ── Final summary ──────────────────────────────────────────────────────
     total_elapsed = time.monotonic() - pipeline_start
     errors = [r for r in results if r.status == StepStatus.FAILED]
@@ -265,6 +371,7 @@ def run_pipeline(
     s_stations = next(r for r in results if r.name == "stations")
     s_readings = next(r for r in results if r.name == "readings")
     s_weather  = next(r for r in results if r.name == "weather")
+    s_forecast = next(r for r in results if r.name == "forecast")
 
     log.info("")
     log.info("*" * 60)
@@ -279,6 +386,7 @@ def run_pipeline(
     log.info("  Total stations in DB    : %d", s_stations.rows_after)
     log.info("  New readings inserted   : %d", s_readings.new_rows)
     log.info("  New weather rows inserted: %d", s_weather.new_rows)
+    log.info("  New forecasts inserted  : %d", s_forecast.new_rows)
     if errors:
         log.info("")
         log.info("  !! %d step(s) encountered errors:", len(errors))
@@ -329,6 +437,18 @@ Examples:
         help="Skip the weather ingestion step.",
     )
     parser.add_argument(
+        "--skip-forecast",
+        action="store_true",
+        help="Skip the forecast inference step.",
+    )
+    parser.add_argument(
+        "--forecast-horizon",
+        type=int,
+        default=6,
+        metavar="H",
+        help="Forecast horizon in hours for the predict step (default: 6).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Fetch data but do not write anything to the database.",
@@ -345,6 +465,8 @@ def main() -> None:
         skip_stations=args.skip_stations,
         skip_readings=args.skip_readings,
         skip_weather=args.skip_weather,
+        skip_forecast=args.skip_forecast,
+        forecast_horizon=args.forecast_horizon,
     )
 
     # Exit with code 1 if any step failed (useful for CI/cron alerting)
