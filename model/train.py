@@ -222,10 +222,21 @@ def train_and_evaluate(
             try:
                 path = _ARTIFACTS / f"{city.lower().replace(' ','_')}_{model_name}_{horizon_hours}h.pkl"
                 import joblib
-                joblib.dump({"model": model, "features": feature_cols,
-                             "city": city, "horizon_h": horizon_hours}, path)
+                # model_rmse and baseline_rmse are stored IN the artifact so predict.py
+                # can read them without a separate file that could get out of sync.
+                # model_version encodes model type + horizon for the forecasts table.
+                joblib.dump({
+                    "model":         model,
+                    "features":      feature_cols,
+                    "city":          city,
+                    "horizon_h":     horizon_hours,
+                    "model_version": f"{model_name}-v1.0",
+                    "model_rmse":    round(m_rmse, 4),
+                    "baseline_rmse": round(b_rmse, 4),
+                }, path)
             except Exception as e:
                 print(f"    [warn] Could not save artifact: {e}")
+
 
         records.append(dict(
             city=city, model=model_name, horizon_h=horizon_hours,
