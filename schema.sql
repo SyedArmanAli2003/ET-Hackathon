@@ -157,11 +157,15 @@ CREATE INDEX idx_forecasts_station_time
 
 -- =============================================================================
 -- 5. USER_PROFILES
---    Per-browser-session personalization data.
+--    Per-Supabase-Auth-user personalization data.
+--    Each row is owned by a single anonymous (or real) Supabase Auth user.
+--    Frontend calls supabase.auth.signInAnonymously() once per browser to
+--    obtain a real JWT, then uses auth.uid() as the row identity.
 -- =============================================================================
 CREATE TABLE user_profiles (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id          TEXT        NOT NULL UNIQUE,        -- browser session token
+    user_id             UUID        NOT NULL UNIQUE,        -- Supabase Auth uid (anon or real)
+                        -- FK to auth.users: deleting an auth user cascade-deletes their profile
     name                TEXT,                               -- optional display name
     vulnerability_flags TEXT[]      NOT NULL DEFAULT '{}',  -- e.g. {'children','asthma'}
     preferred_station   UUID
@@ -170,10 +174,17 @@ CREATE TABLE user_profiles (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Single-column index: every profile lookup starts from a session token,
--- so this avoids full-table scans on every personalisation request.
-CREATE INDEX idx_user_profiles_session
-    ON user_profiles (session_id);
+-- FK → auth.users: ON DELETE CASCADE means removing an anonymous user automatically
+-- removes their personalization data (GDPR-friendly).
+ALTER TABLE user_profiles
+    ADD CONSTRAINT user_profiles_user_id_fkey
+        FOREIGN KEY (user_id)
+        REFERENCES auth.users (id)
+        ON DELETE CASCADE;
+
+-- Unique index on user_id (also serves as ON CONFLICT target for upsert).
+CREATE UNIQUE INDEX idx_user_profiles_user_id
+    ON user_profiles (user_id);
 
 -- Index on the FK to stations: avoids sequential scans when joining
 -- user_profiles to stations for the preferred_station relationship.
@@ -227,33 +238,30 @@ CREATE POLICY "forecasts_select_anon" ON forecasts
 CREATE POLICY "forecasts_insert_service" ON forecasts
     FOR INSERT TO service_role WITH CHECK (true);
 
--- ── User profiles: session_id is PII — only the owning session can access
--- NOTE: current_setting() is wrapped in (SELECT ...) to avoid per-row
--- re-evaluation (Supabase performance best practice for RLS init plans).
+-- ── User profiles: auth.uid()-based isolation
+-- auth.uid() reads the verified `sub` claim from the Supabase-signed JWT.
+-- The frontend calls supabase.auth.signInAnonymously() to obtain a real JWT
+-- before any user_profiles access. The `sub` claim is cryptographically bound
+-- to the user and cannot be forged by the client.
+-- (SELECT auth.uid()) is wrapped in a sub-select to prevent per-row re-evaluation
+-- per Supabase RLS init-plan performance guidance.
 CREATE POLICY "user_profiles_select_own" ON user_profiles
     FOR SELECT TO anon, authenticated
-    USING (
-        session_id = (SELECT current_setting('request.jwt.claims', true)::json->>'session_id')
-        OR current_user = 'service_role'
-    );
+    USING ( (SELECT auth.uid()) = user_id );
 
 CREATE POLICY "user_profiles_insert_own" ON user_profiles
     FOR INSERT TO anon, authenticated
-    WITH CHECK (
-        session_id = (SELECT current_setting('request.jwt.claims', true)::json->>'session_id')
-        OR current_user = 'service_role'
-    );
+    WITH CHECK ( (SELECT auth.uid()) = user_id );
 
+-- UPDATE requires both USING and WITH CHECK to prevent user_id reassignment:
+-- USING filters which rows are visible to the update;
+-- WITH CHECK validates the new column values after the update.
 CREATE POLICY "user_profiles_update_own" ON user_profiles
     FOR UPDATE TO anon, authenticated
-    USING (
-        session_id = (SELECT current_setting('request.jwt.claims', true)::json->>'session_id')
-        OR current_user = 'service_role'
-    )
-    WITH CHECK (
-        session_id = (SELECT current_setting('request.jwt.claims', true)::json->>'session_id')
-        OR current_user = 'service_role'
-    );
+    USING     ( (SELECT auth.uid()) = user_id )
+    WITH CHECK( (SELECT auth.uid()) = user_id );
 
+-- DELETE: service_role only — used for admin cleanup and GDPR erasure.
+-- Anonymous auth user deletion via auth.users CASCADE handles normal self-deletion.
 CREATE POLICY "user_profiles_delete_service" ON user_profiles
     FOR DELETE TO service_role USING (true);
