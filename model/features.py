@@ -249,6 +249,67 @@ def forecast_feasibility(
     )
 
 
+def build_latest_features(
+    readings: pd.DataFrame,
+    weather: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    For each station, return ONE ROW: the feature vector evaluated at that
+    station's most recent reading timestamp ("now" per station).
+
+    This is the inference input for model/predict.py — not used in training.
+
+    Implementation note
+    -------------------
+    Lag features (aqi_lag_1h, aqi_lag_6h, aqi_roll24h) REQUIRE historical
+    data to compute — you cannot evaluate "AQI 1 hour ago" without looking
+    backward. So this function:
+
+        1. Runs build_features() on the FULL readings history
+           (needed so every lag has access to past observations).
+        2. Returns only the LAST row per station (highest timestamp).
+
+    The result contains exactly the same feature columns used in training,
+    evaluated at the current moment for each station. Pass these rows
+    directly to model.predict() for real-time AQI forecasts.
+
+    Parameters
+    ----------
+    readings : Full readings history (same format as build_features input)
+    weather  : Full weather history  (same format as build_features input)
+
+    Returns
+    -------
+    DataFrame with one row per station, sorted by city.
+    Columns: city, station_id, timestamp, aqi (current),
+             aqi_lag_1h, aqi_lag_6h, aqi_lag_24h, aqi_roll24h,
+             temperature, wind_speed, humidity, hour_of_day, day_of_week.
+    NaN in a lag column means no reading existed in that window —
+    the same behaviour as during training; the model handles it.
+    """
+    # Step 1: build full feature matrix (needed for correct lag computation)
+    df = build_features(readings, weather)
+
+    # Step 2: take the last (most recent) row per station
+    # sort_values ensures we take the chronologically last, not just the last
+    # row in the DataFrame (which depends on data ingestion order)
+    latest = (
+        df.sort_values("timestamp")
+          .groupby("station_id", sort=False)
+          .last()
+          .reset_index()
+    )
+
+    # Restore city (groupby.last() drops non-aggregated string columns in
+    # older pandas; re-join from the original df to be safe)
+    if "city" not in latest.columns:
+        city_map = df[["station_id", "city"]].drop_duplicates("station_id")
+        latest = latest.merge(city_map, on="station_id", how="left")
+
+    latest = latest.sort_values("city").reset_index(drop=True)
+    return latest
+
+
 # =============================================================================
 # Internal helpers
 # =============================================================================

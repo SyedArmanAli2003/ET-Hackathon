@@ -4,3 +4,5 @@ skills-lock.json
 **/__pycache__/
 *.pyc
 model/artifacts/*.pkl
+ingestion/__pycache__/db.cpython-314.pyc
+ingestion/__pycache__/db.cpython-314.pyc
