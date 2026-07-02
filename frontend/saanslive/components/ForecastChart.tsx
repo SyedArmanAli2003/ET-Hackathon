@@ -13,26 +13,12 @@ import {
     YAxis,
 } from "recharts";
 import type { Forecast } from "../lib/data";
+import { AQI_SEVERITY_BANDS } from "../lib/aqi";
 
 export type ForecastChartProps = {
     forecasts: Forecast[];
     currentAqi: number | null;
 };
-
-type SeverityBand = {
-    min: number;
-    max: number; // inclusive upper bound, or Infinity
-    color: string;
-};
-
-const AQI_SEVERITY_BANDS: SeverityBand[] = [
-    { min: 0, max: 50, color: "rgba(46,125,50,0.12)" }, // green
-    { min: 51, max: 100, color: "rgba(242,201,76,0.16)" }, // yellow
-    { min: 101, max: 150, color: "rgba(242,153,74,0.18)" }, // orange
-    { min: 151, max: 200, color: "rgba(235,87,87,0.18)" }, // red
-    { min: 201, max: 300, color: "rgba(155,81,224,0.18)" }, // purple
-    { min: 301, max: Infinity, color: "rgba(107,27,36,0.18)" }, // maroon
-];
 
 function clampFinite(max: number) {
     return Number.isFinite(max) ? max : 400;
@@ -112,7 +98,7 @@ export default function ForecastChart({
                                 x2={xDomain[1]}
                                 y1={b.min}
                                 y2={clampFinite(b.max)}
-                                fill={b.color}
+                                fill={b.areaColor}
                                 strokeOpacity={0}
                             />
                         ))}

@@ -12,38 +12,11 @@ import {
     type Reading,
     type Station,
 } from "../lib/data";
+import { getAqiBand } from "../lib/aqi";
 
 export type StationMapProps = {
     onStationSelect: (stationId: string) => void;
 };
-
-type SeverityBand = {
-    min: number;
-    max: number; // inclusive upper bound, or Infinity
-    label: string;
-    color: string;
-};
-
-const AQI_SEVERITY_BANDS: SeverityBand[] = [
-    { min: 0, max: 50, label: "Good", color: "#2e7d32" }, // green
-    { min: 51, max: 100, label: "Moderate", color: "#f2c94c" }, // yellow
-    {
-        min: 101,
-        max: 150,
-        label: "Unhealthy for Sensitive Groups",
-        color: "#f2994a",
-    }, // orange
-    { min: 151, max: 200, label: "Unhealthy", color: "#eb5757" }, // red
-    { min: 201, max: 300, label: "Very Unhealthy", color: "#9b51e0" }, // purple
-    { min: 301, max: Infinity, label: "Hazardous", color: "#6b1b24" }, // maroon
-];
-
-function severityForAqi(aqi: number): SeverityBand {
-    return (
-        AQI_SEVERITY_BANDS.find((b) => aqi >= b.min && aqi <= b.max) ??
-        AQI_SEVERITY_BANDS[AQI_SEVERITY_BANDS.length - 1]
-    );
-}
 
 function createColoredIcon(color: string) {
     return L.divIcon({
@@ -153,7 +126,7 @@ export default function StationMap({ onStationSelect }: StationMapProps) {
                 {stations.map((station) => {
                     const reading = readingsByStationId[station.id];
                     const aqi = reading?.aqi ?? null;
-                    const band = aqi === null ? null : severityForAqi(aqi);
+                    const band = aqi === null ? null : getAqiBand(aqi);
                     const markerColor = band?.color ?? "#9ca3af";
 
                     return (

@@ -2,33 +2,13 @@
 
 import React, { useMemo } from "react";
 import type { Forecast, Reading, Station } from "../lib/data";
+import { getAqiBand } from "../lib/aqi";
 
 export type AdvisoryPanelProps = {
     station: Station;
     forecasts: Forecast[];
     currentReading: Reading | null;
 };
-
-const EPA_BANDS = [
-    { min: 0, max: 50, category: "Good", color: "#2e7d32" },
-    { min: 51, max: 100, category: "Moderate", color: "#f2c94c" },
-    {
-        min: 101,
-        max: 150,
-        category: "Unhealthy for Sensitive Groups",
-        color: "#f2994a",
-    },
-    { min: 151, max: 200, category: "Unhealthy", color: "#eb5757" },
-    { min: 201, max: 300, category: "Very Unhealthy", color: "#9b51e0" },
-    { min: 301, max: Infinity, category: "Hazardous", color: "#6b1b24" },
-];
-
-function bandForAqi(aqi: number) {
-    return (
-        EPA_BANDS.find((b) => aqi >= b.min && aqi <= b.max) ??
-        EPA_BANDS[EPA_BANDS.length - 1]
-    );
-}
 
 function formatTime(iso: string) {
     const d = new Date(iso);
@@ -60,10 +40,10 @@ export default function AdvisoryPanel({
             f.predicted_aqi > acc.predicted_aqi ? f : acc
         );
 
-        const band = bandForAqi(peak.predicted_aqi);
+        const band = getAqiBand(peak.predicted_aqi);
 
         return {
-            category: band.category,
+            category: band.label,
             value: Math.round(peak.predicted_aqi),
             time: formatTime(peak.forecast_at),
         };
