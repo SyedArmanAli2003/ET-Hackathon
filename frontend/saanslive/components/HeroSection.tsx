@@ -1,12 +1,13 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Menu, X } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Asset image paths — drop your own paths/URLs here
 // ─────────────────────────────────────────────────────────────────────────────
-const BASE_IMAGE   = "/smoggy_skyline.png";   // hazy / smoggy version
+const BASE_IMAGE = "/smoggy_skyline.png";   // hazy / smoggy version
 const REVEAL_IMAGE = "/clear_skyline.png";    // clear blue-sky version
 
 // Spotlight radius in pixels
@@ -32,7 +33,7 @@ function RevealLayer({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const resize = () => {
-      canvas.width  = window.innerWidth;
+      canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
     };
     resize();
@@ -56,12 +57,12 @@ function RevealLayer({
       cursorX, cursorY, 0,
       cursorX, cursorY, SPOTLIGHT_R,
     );
-    grad.addColorStop(0,    "rgba(255,255,255,1)");
-    grad.addColorStop(0.4,  "rgba(255,255,255,1)");
-    grad.addColorStop(0.6,  "rgba(255,255,255,0.75)");
+    grad.addColorStop(0, "rgba(255,255,255,1)");
+    grad.addColorStop(0.4, "rgba(255,255,255,1)");
+    grad.addColorStop(0.6, "rgba(255,255,255,0.75)");
     grad.addColorStop(0.75, "rgba(255,255,255,0.4)");
     grad.addColorStop(0.88, "rgba(255,255,255,0.12)");
-    grad.addColorStop(1,    "rgba(255,255,255,0)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
 
     ctx.fillStyle = grad;
     ctx.beginPath();
@@ -70,10 +71,10 @@ function RevealLayer({
 
     // Apply canvas as CSS mask on the reveal div
     const dataUrl = canvas.toDataURL();
-    reveal.style.maskImage          = `url(${dataUrl})`;
-    reveal.style.webkitMaskImage    = `url(${dataUrl})`;
-    reveal.style.maskSize           = "100% 100%";
-    reveal.style.webkitMaskSize     = "100% 100%";
+    reveal.style.maskImage = `url(${dataUrl})`;
+    reveal.style.webkitMaskImage = `url(${dataUrl})`;
+    reveal.style.maskSize = "100% 100%";
+    reveal.style.webkitMaskSize = "100% 100%";
   });
 
   return (
@@ -125,20 +126,25 @@ function LogoMark() {
         />
       ))}
       {/* Haze streaks */}
-      <rect x="32"  y="170" width="80"  height="6" rx="3" fill="#ffffff" fillOpacity="0.4" />
-      <rect x="48"  y="184" width="60"  height="5" rx="2.5" fill="#ffffff" fillOpacity="0.25" />
-      <rect x="144" y="170" width="80"  height="6" rx="3" fill="#ffffff" fillOpacity="0.4" />
-      <rect x="148" y="184" width="60"  height="5" rx="2.5" fill="#ffffff" fillOpacity="0.25" />
+      <rect x="32" y="170" width="80" height="6" rx="3" fill="#ffffff" fillOpacity="0.4" />
+      <rect x="48" y="184" width="60" height="5" rx="2.5" fill="#ffffff" fillOpacity="0.25" />
+      <rect x="144" y="170" width="80" height="6" rx="3" fill="#ffffff" fillOpacity="0.4" />
+      <rect x="148" y="184" width="60" height="5" rx="2.5" fill="#ffffff" fillOpacity="0.25" />
     </svg>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main HeroSection component
+/* Main HeroSection component */
 // ─────────────────────────────────────────────────────────────────────────────
+const StationMap = dynamic(() => import("./StationMap"), { ssr: false });
+
 export default function HeroSection() {
   const [cursorPos, setCursorPos] = useState({ x: -999, y: -999 });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [selectedStationId, setSelectedStationId] = useState<string | null>(
+    null
+  );
   const mouseRef = useRef({ x: -999, y: -999 });
   const smoothRef = useRef({ x: -999, y: -999 });
   const rafRef = useRef<number | null>(null);
@@ -184,11 +190,10 @@ export default function HeroSection() {
           {(["Forecast", "Map", "Health Advisory", "About"] as const).map((item) => (
             <button
               key={item}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                item === "Forecast"
-                  ? "bg-white/30 text-white"
-                  : "text-white/80 hover:bg-white/20 hover:text-white"
-              }`}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${item === "Forecast"
+                ? "bg-white/30 text-white"
+                : "text-white/80 hover:bg-white/20 hover:text-white"
+                }`}
             >
               {item}
             </button>
@@ -292,12 +297,23 @@ export default function HeroSection() {
           style={{ animationDelay: "0.85s" }}
         >
           <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
-            Hyperlocal predictions and personalized health advisories for families,
-            elderly residents, and anyone who needs to know what&apos;s coming.
+            Hyperlocal predictions and personalized health advisories for
+            families, elderly residents, and anyone who needs to know what&apos;s
+            coming.
           </p>
           <button className="bg-[#e8702a] hover:bg-[#d2611f] text-white text-sm font-medium px-7 py-3 rounded-full transition-all hover:scale-[1.03] active:scale-95 hover:shadow-lg hover:shadow-[#e8702a]/30">
             View Forecast
           </button>
+          <div className="text-white/70 text-xs">
+            Select a city marker on the map to view details.
+          </div>
+        </div>
+
+        {/* Map (Leaflet) */}
+        <div className="absolute left-5 right-5 top-[55%] sm:top-[52%] z-50 hero-anim hero-fade">
+          <div className="max-w-[720px] mx-auto">
+            <StationMap onStationSelect={(stationId) => console.log("selected", stationId)} />
+          </div>
         </div>
       </section>
     </div>
