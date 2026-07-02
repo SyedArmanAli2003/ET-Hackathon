@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Menu, X } from "lucide-react";
+import Link from "next/link";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Asset image paths — drop your own paths/URLs here
@@ -195,9 +196,9 @@ export default function HeroSection() {
 
         {/* Right: desktop CTA + mobile menu toggle */}
         <div className="flex items-center gap-3">
-          <button className="hidden md:block bg-white text-gray-900 text-sm font-semibold px-6 py-2.5 rounded-full hover:bg-gray-100 transition-colors">
+          <Link href="/dashboard" className="hidden md:block bg-white text-gray-900 text-sm font-semibold px-6 py-2.5 rounded-full hover:bg-gray-100 transition-colors">
             Get Started
-          </button>
+          </Link>
           <button
             className="md:hidden text-white p-1"
             onClick={() => setMobileMenuOpen((v) => !v)}
@@ -220,9 +221,9 @@ export default function HeroSection() {
               {item}
             </button>
           ))}
-          <button className="mt-2 bg-[#e8702a] text-white text-sm font-semibold px-6 py-3 rounded-full w-full">
+          <Link href="/dashboard" className="mt-2 text-center bg-[#e8702a] text-white text-sm font-semibold px-6 py-3 rounded-full w-full block">
             Get Started
-          </button>
+          </Link>
         </div>
       )}
 
@@ -294,9 +295,9 @@ export default function HeroSection() {
             families, elderly residents, and anyone who needs to know what&apos;s
             coming.
           </p>
-          <button className="bg-[#e8702a] hover:bg-[#d2611f] text-white text-sm font-medium px-7 py-3 rounded-full transition-all hover:scale-[1.03] active:scale-95 hover:shadow-lg hover:shadow-[#e8702a]/30">
+          <Link href="/dashboard" className="bg-[#e8702a] hover:bg-[#d2611f] text-white text-sm font-medium px-7 py-3 rounded-full transition-all hover:scale-[1.03] active:scale-95 hover:shadow-lg hover:shadow-[#e8702a]/30">
             View Forecast
-          </button>
+          </Link>
         </div>
       </section>
     </div>

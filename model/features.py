@@ -284,8 +284,11 @@ def build_latest_features(
     Columns: city, station_id, timestamp, aqi (current),
              aqi_lag_1h, aqi_lag_6h, aqi_lag_24h, aqi_roll24h,
              temperature, wind_speed, humidity, hour_of_day, day_of_week.
-    NaN in a lag column means no reading existed in that window —
-    the same behaviour as during training; the model handles it.
+    Note: train.py drops ANY row with a NaN feature before fitting
+    (``dropna(subset=feature_cols + [target_col])``), so the model
+    never saw partial NaN during training.  predict.py therefore also
+    skips stations with any NaN feature — partial NaN is not handled,
+    it is treated as unusable, consistent with training.
     """
     # Step 1: build full feature matrix (needed for correct lag computation)
     df = build_features(readings, weather)

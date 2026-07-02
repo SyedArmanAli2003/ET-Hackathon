@@ -153,8 +153,8 @@ def run_inference(
         missing = [c for c in feature_cols if c not in row.index or pd.isna(row[c])]
         X = pd.DataFrame([{c: row.get(c, float("nan")) for c in feature_cols}])
 
-        if len(missing) == len(feature_cols):
-            skipped.append((city, "all feature values are NaN — no usable current data"))
+        if missing:
+            skipped.append((city, f"{len(missing)} feature(s) NaN: {', '.join(missing)} — model was never trained on incomplete rows"))
             continue
 
         # ── 3. Predict ────────────────────────────────────────────────────────
@@ -170,6 +170,7 @@ def run_inference(
             old = predicted_aqi
             predicted_aqi = max(0.0, min(500.0, predicted_aqi))
             print(f"  [clip] {city}: predicted {old:.1f} clipped to {predicted_aqi:.1f}")
+
 
         # ── 4. Compute forecast_at ────────────────────────────────────────────
         # forecast_at = latest reading timestamp for this station + horizon
