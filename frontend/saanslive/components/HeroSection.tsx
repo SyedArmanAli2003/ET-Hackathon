@@ -1,6 +1,5 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Menu, X } from "lucide-react";
 
@@ -134,17 +133,11 @@ function LogoMark() {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 /* Main HeroSection component */
 // ─────────────────────────────────────────────────────────────────────────────
-const StationMap = dynamic(() => import("./StationMap"), { ssr: false });
-
 export default function HeroSection() {
   const [cursorPos, setCursorPos] = useState({ x: -999, y: -999 });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [selectedStationId, setSelectedStationId] = useState<string | null>(
-    null
-  );
   const mouseRef = useRef({ x: -999, y: -999 });
   const smoothRef = useRef({ x: -999, y: -999 });
   const rafRef = useRef<number | null>(null);
@@ -304,16 +297,6 @@ export default function HeroSection() {
           <button className="bg-[#e8702a] hover:bg-[#d2611f] text-white text-sm font-medium px-7 py-3 rounded-full transition-all hover:scale-[1.03] active:scale-95 hover:shadow-lg hover:shadow-[#e8702a]/30">
             View Forecast
           </button>
-          <div className="text-white/70 text-xs">
-            Select a city marker on the map to view details.
-          </div>
-        </div>
-
-        {/* Map (Leaflet) */}
-        <div className="absolute left-5 right-5 top-[55%] sm:top-[52%] z-50 hero-anim hero-fade">
-          <div className="max-w-[720px] mx-auto">
-            <StationMap onStationSelect={(stationId) => console.log("selected", stationId)} />
-          </div>
         </div>
       </section>
     </div>
