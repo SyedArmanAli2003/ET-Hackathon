@@ -27,13 +27,7 @@ export default function AdvisoryPanel({
     forecasts,
 }: AdvisoryPanelProps) {
     const advisory = useMemo(() => {
-        if (!forecasts || forecasts.length === 0) {
-            return {
-                category: "Unknown",
-                value: 0,
-                time: "—",
-            };
-        }
+        if (!forecasts || forecasts.length === 0) return null;
 
         // Peak predicted AQI in next 24h
         const peak = forecasts.reduce((acc, f) =>
@@ -43,7 +37,7 @@ export default function AdvisoryPanel({
         const band = getAqiBand(peak.predicted_aqi);
 
         return {
-            category: band.label,
+            band,
             value: Math.round(peak.predicted_aqi),
             time: formatTime(peak.forecast_at),
         };
@@ -55,15 +49,22 @@ export default function AdvisoryPanel({
                 Air Quality Advisory
             </div>
 
-            <div className="text-white text-sm leading-relaxed">
-                AQI is expected to reach{" "}
-                <span style={{ color: "#e8702a", fontWeight: 700 }}>
-                    '{advisory.category}' ({advisory.value})
-                </span>{" "}
-                near <span style={{ fontWeight: 700 }}>{station.name}</span> by{" "}
-                <span style={{ fontWeight: 700 }}>{advisory.time}</span> — limit outdoor
-                activity for children and elderly residents.
-            </div>
+            {advisory ? (
+                <div className="text-white text-sm leading-relaxed">
+                    AQI is expected to reach{" "}
+                    <span style={{ color: advisory.band.color, fontWeight: 700 }}>
+                        '{advisory.band.label}' ({advisory.value})
+                    </span>{" "}
+                    near <span style={{ fontWeight: 700 }}>{station.name}</span> by{" "}
+                    <span style={{ fontWeight: 700 }}>{advisory.time}</span> — limit outdoor
+                    activity for children and elderly residents.
+                </div>
+            ) : (
+                <div className="text-white/60 text-sm leading-relaxed">
+                    No forecast available yet for <span style={{ fontWeight: 700 }}>{station.name}</span>.
+                    Model will generate predictions on the next pipeline run.
+                </div>
+            )}
         </div>
     );
 }

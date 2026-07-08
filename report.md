@@ -1284,3 +1284,177 @@ Split: train=2026-06-29 08:15→23:45, test=2026-06-30 00:00→06:30
 | Immediately | `model/predict.py` — load saved artifacts, run inference on latest readings |
 
 *Report last updated: 2026-07-01 06:46 UTC*
+
+
+---
+
+## 21. CI Pipeline Fix, Supabase MCP Re-Authentication & GitHub Actions Audit
+
+> **Timestamp:** 2026-07-08 06:00–07:20 UTC
+
+### 21.1 Supabase MCP Server Re-Authentication
+
+The Supabase MCP server was showing **Unauthorized** in the IDE. Root cause: the mcp_config.json was missing a Personal Access Token (PAT). Fixed by:
+
+1. Updated C:\Users\syeda\.gemini\antigravity\mcp_config.json — added serverUrl with project_ref=ckjiukvxqqvjmpxhpclb and a headers.Authorization: Bearer sbp_... PAT entry.
+2. MCP server confirmed healthy via execute_sql test query returning current_database=postgres.
+
+### 21.2 GitHub Actions Secrets Audit
+
+Both required secrets confirmed present in Settings → Secrets and variables → Actions:
+
+| Secret | Status |
+|--------|--------|
+| SUPABASE_DB_URL | ✅ Present |
+| OPENAQ_API_KEY | ✅ Present |
+
+### 21.3 Root Cause of 39 Consecutive Failed CI Runs
+
+**All 39 scheduled runs (runs #1–#39) failed within ~50 seconds** at the DB connection step with:
+
+`
+sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at
+"aws-0-ap-south-1.pooler.supabase.com" (3.108.251.216), port 6543 failed:
+FATAL:  (ENOTFOUND) tenant/user postgres.ckjiukvxqqvjmpxhpclb not found
+Error: Process completed with exit code 1.
+`
+
+**Root cause:** SUPABASE_DB_URL contained the wrong pooler region. The project is in p-southeast-1 (Singapore, cluster ws-1), but the secret used ws-0-ap-south-1.pooler.supabase.com (Mumbai).
+
+### 21.4 Fix Applied
+
+1. **GitHub secret updated** via browser to the correct pooler URL:
+   `
+   postgresql://postgres.ckjiukvxqqvjmpxhpclb:<password>@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres
+   `
+2. **ingestion/.env comment corrected** — the commented-out pooler line now shows ws-1-ap-southeast-1 so future developers copy the right URL.
+3. **Manual run #41 triggered** — completed successfully in 9m 24s. Summary:
+   `
+   stations    OK  new_rows=  2  total=  29  elapsed= 11.9s
+   readings    OK  new_rows=1624  total=3860  elapsed=332.5s
+   weather     OK  new_rows= 696  total=1824  elapsed=139.3s
+   forecast    OK  new_rows=  0  total=  19  elapsed=  4.5s
+   `
+   1,624 new readings and 696 weather rows written — first successful CI run in the project's history.
+
+---
+
+## 22. run_ingestion.py — predict.py Already Wired as Step 4
+
+> **Timestamp:** 2026-07-08 07:00 UTC
+
+Confirmed: model/predict.py is **already integrated** as Step 4 in un_ingestion.py (lines 223–301). It was added in an earlier session. No changes needed.
+
+**Fault-isolation contract:**
+- predict is imported lazily inside the 	ry block, so a missing xgboost/lightgbm install never breaks Steps 1–3.
+- Stations with no trained artifact log a WARNING and are skipped gracefully inside predict.py.
+- Genuine infrastructure failures (DB down, corrupt .pkl) set status=FAILED but do not abort subsequent steps.
+- Default horizon: --forecast-horizon 6
+
+**Run #42 (manual dispatch, 2026-07-08 07:22 UTC)** — ✅ SUCCESS in 10m 28s:
+`
+STEP 1/4  setup_stations    OK  new_rows=  0  total=  29  elapsed= 11.3s
+STEP 2/4  ingest_readings   OK  new_rows=  0  total=3860  elapsed=386.5s
+STEP 3/4  ingest_weather    OK  new_rows= 29  total=1853  elapsed=170.8s
+STEP 4/4  run_forecast      OK  new_rows=  0  total=  19  elapsed=  5.8s
+`
+
+Step 4 ran and logged: *"No forecasts produced — no artifacts found for horizon=6h model=xgb. Run model/train.py --horizon 6 first."* — correct expected behavior (model artifacts not yet committed to repo).
+
+---
+
+## 23. Frontend — lib/data.ts Switched from Mock to Real Supabase Queries
+
+> **Timestamp:** 2026-07-08 07:17–07:40 UTC
+
+### 23.1 Previous State (Mock)
+
+All three functions in rontend/saanslive/lib/data.ts returned hardcoded data:
+- getStations() → 5 fake stations (Delhi, Mumbai, Bengaluru, Kolkata, Chennai)
+- getLatestForecasts() → synthetic sine-wave AQI forecasts
+- getCurrentReading() → synthetic readings based on CITY_BASE_AQI constants
+
+### 23.2 Changes Made
+
+1. **Installed @supabase/supabase-js** (
+pm install @supabase/supabase-js)
+2. **Created rontend/saanslive/.env.local** with the publishable key and project URL
+3. **Rewrote lib/data.ts** — all three functions now execute real Supabase queries:
+
+| Function | Query |
+|----------|-------|
+| getStations() | FROM stations SELECT id,external_id,city,name,latitude,longitude ORDER BY city |
+| getLatestForecasts(stationId) | FROM forecasts WHERE station_id=? AND horizon_hours=6 ORDER BY forecast_at ASC LIMIT 24 |
+| getCurrentReading(stationId) | FROM readings WHERE station_id=? ORDER BY timestamp DESC LIMIT 1 |
+
+Return shapes are **identical to the mock** — zero downstream component changes required.
+
+### 23.3 Live Spot-Check (DB vs Dashboard)
+
+| Station | DB qi (direct SQL) | Dashboard display | Match |
+|---------|----------------------|-------------------|-------|
+| Ahmedabad | 17.17 (2026-07-08 04:30 UTC) | Current AQI: **17.17** | ✅ Exact |
+| Bengaluru | 59.33 (2026-07-08 04:30 UTC) | Current AQI: **59.33** | ✅ Exact |
+
+### 23.4 End-to-End Trace — Bengaluru (BTM Layout, Bengaluru - CPCB)
+
+| Layer | Value | Source |
+|-------|-------|--------|
+| Raw reading | aqi=59.33, pm25=16.06, ts=2026-07-08 04:30 UTC | eadings table, data_source=openaq-v3 |
+| Forecast row | predicted_aqi=58.64, model_version=xgb-v1.0, horizon=6h, model_rmse=1.71 | orecasts table, created 2026-07-01 13:01 UTC |
+| Dashboard display | Current AQI: 59.33, Advisory: *"Moderate (59) near BTM Layout"* | /dashboard page |
+
+The reading and forecast originate from the same physical station in Supabase. The 7-day gap between forecast creation and latest reading is expected — new forecasts will be written by CI once model artifacts are committed.
+
+### 23.5 AdvisoryPanel Empty-State Bug Fixed
+
+Stations with no forecast rows (e.g. Ahmedabad) previously rendered 'Unknown' (0) in the advisory. Fixed: when orecasts.length === 0, useMemo returns 
+ull and the panel displays a clean message: *"No forecast available yet for [station]. Model will generate predictions on the next pipeline run."*
+
+The dvisory.band.color is now used directly in the render (instead of hardcoded #e8702a), so all 6 EPA severity bands show their correct color.
+
+---
+
+## 24. Dashboard City Count — Now 20 Real Cities
+
+The city selector now shows **all 20 cities** with real stations from the database (Ahmedabad, Bengaluru, Bhopal, Chandigarh, Chennai, Delhi, Guwahati, Hyderabad, Indore, Jaipur, Kanpur, Kochi, Kolkata, Lucknow, Mumbai, Nagpur, Patna, Pune, Surat, Visakhapatnam) — replacing the previous 5 hardcoded mock cities.
+
+---
+
+## 25. Updated Project File Structure (as of 2026-07-08 07:40 UTC)
+
+`
+ET-Hackathon/
+├── schema.sql
+├── report.md
+├── .github/workflows/ingest.yml        # Fixed: correct ap-southeast-1 pooler region
+├── ingestion/
+│   ├── .env                            # SUPABASE_DB_URL (direct conn), OPENAQ_API_KEY
+│   ├── run_ingestion.py                # 4-step orchestrator (stations→readings→weather→forecast)
+│   ├── setup_stations.py
+│   ├── ingest_readings.py
+│   ├── ingest_weather.py
+│   └── ...
+├── model/
+│   ├── features.py
+│   ├── split.py
+│   ├── train.py
+│   ├── predict.py                      # Step 4 in CI pipeline
+│   └── artifacts/                      # .pkl files — need to be committed to enable CI forecasts
+└── frontend/saanslive/
+    ├── .env.local                      # NEW: NEXT_PUBLIC_SUPABASE_URL + ANON_KEY
+    ├── lib/
+    │   ├── data.ts                     # UPDATED: real Supabase queries (was mock)
+    │   └── aqi.ts                      # Shared AQI band mapping (single source of truth)
+    ├── components/
+    │   ├── StationMap.tsx              # Uses getAqiBand() from lib/aqi.ts
+    │   ├── ForecastChart.tsx           # Uses AQI_SEVERITY_BANDS from lib/aqi.ts
+    │   └── AdvisoryPanel.tsx           # UPDATED: null-safe empty-state, uses band.color
+    └── app/
+        ├── page.tsx                    # Hero page only — zero Leaflet DOM elements
+        └── dashboard/page.tsx          # Full dashboard with live Supabase data
+`
+
+---
+
+*Report last updated: 2026-07-08 07:40 UTC*
