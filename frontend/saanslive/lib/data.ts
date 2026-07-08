@@ -10,17 +10,7 @@
  *   - Reading     ↔  public.readings
  */
 
-import { createClient } from "@supabase/supabase-js";
-
-// =============================================================================
-// Supabase client — uses publishable key (safe to expose in browser)
-// =============================================================================
-
-const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey  = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-// Singleton — Next.js module cache keeps this alive across renders
-const supabase = createClient(supabaseUrl, supabaseKey);
+import { supabase } from "./supabaseClient";
 
 // =============================================================================
 // TypeScript interfaces — mirror the Supabase table schemas exactly

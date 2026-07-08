@@ -17,6 +17,7 @@ const StationMap = dynamic(
 
 import ForecastChart from "../../components/ForecastChart";
 import AdvisoryPanel from "../../components/AdvisoryPanel";
+import OnboardingModal, { type UserProfile } from "../../components/OnboardingModal";
 
 const darkBgCard =
     "bg-black/70 border border-white/10 rounded-2xl p-4 backdrop-blur-md";
@@ -30,6 +31,7 @@ export default function DashboardPage() {
     const [currentReading, setCurrentReading] = useState<Reading | null>(null);
     const [forecasts, setForecasts] = useState<Forecast[]>([]);
     const [loading, setLoading] = useState(true);
+    const [profile, setProfile] = useState<UserProfile | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -121,6 +123,15 @@ export default function DashboardPage() {
 
     return (
         <div className="min-h-screen bg-black text-white">
+            <OnboardingModal
+                onComplete={(p) => {
+                    setProfile(p);
+                    if (p.preferred_station) {
+                        setSelectedStationId(p.preferred_station);
+                    }
+                }}
+            />
+
             <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
                 <div className="mb-5">
                     <h1 className="text-3xl font-semibold">Dashboard</h1>
@@ -175,6 +186,7 @@ export default function DashboardPage() {
                                     station={selectedStation}
                                     forecasts={forecasts}
                                     currentReading={currentReading}
+                                    vulnerabilityFlags={profile?.vulnerability_flags}
                                 />
                             ) : (
                                 <div className="bg-black/60 border border-white/10 rounded-2xl p-4">

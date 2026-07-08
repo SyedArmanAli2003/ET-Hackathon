@@ -1,5 +1,5 @@
 /**
- * frontend/lib/userProfile.js
+ * lib/userProfile.js
  *
  * getOrCreateProfile — Anonymous Auth + user_profiles upsert
  * ──────────────────────────────────────────────────────────

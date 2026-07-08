@@ -8,7 +8,36 @@ export type AdvisoryPanelProps = {
     station: Station;
     forecasts: Forecast[];
     currentReading: Reading | null;
+    /** Vulnerability flags from the user's profile, e.g. ["children", "elderly"]. */
+    vulnerabilityFlags?: string[];
 };
+
+const FLAG_LABELS: Record<string, string> = {
+    children: "children",
+    elderly: "elderly residents",
+    asthma: "people with asthma or respiratory conditions",
+};
+
+/**
+ * Build the closing guidance clause based on the user's actual flags.
+ * Falls back to generic guidance when no flags are set, rather than
+ * assuming "children and elderly" applies to everyone.
+ */
+function buildGuidanceClause(flags: string[] | undefined): string {
+    const known = (flags ?? []).filter((f) => FLAG_LABELS[f]);
+
+    if (known.length === 0) {
+        return "consider limiting prolonged outdoor exertion";
+    }
+
+    const labels = known.map((f) => FLAG_LABELS[f]);
+    const joined =
+        labels.length === 1
+            ? labels[0]
+            : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+
+    return `limit outdoor activity for ${joined}`;
+}
 
 function formatTime(iso: string) {
     const d = new Date(iso);
@@ -25,6 +54,7 @@ function formatTime(iso: string) {
 export default function AdvisoryPanel({
     station,
     forecasts,
+    vulnerabilityFlags,
 }: AdvisoryPanelProps) {
     const advisory = useMemo(() => {
         if (!forecasts || forecasts.length === 0) return null;
@@ -56,8 +86,8 @@ export default function AdvisoryPanel({
                         '{advisory.band.label}' ({advisory.value})
                     </span>{" "}
                     near <span style={{ fontWeight: 700 }}>{station.name}</span> by{" "}
-                    <span style={{ fontWeight: 700 }}>{advisory.time}</span> — limit outdoor
-                    activity for children and elderly residents.
+                    <span style={{ fontWeight: 700 }}>{advisory.time}</span> —{" "}
+                    {buildGuidanceClause(vulnerabilityFlags)}.
                 </div>
             ) : (
                 <div className="text-white/60 text-sm leading-relaxed">
