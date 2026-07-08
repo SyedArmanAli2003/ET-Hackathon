@@ -3,42 +3,30 @@
 /**
  * OnboardingModal.tsx
  *
- * First-visit onboarding form for SaanSLive.
+ * First-visit onboarding form for SaanSLive — fully client-side.
  *
  * Flow
  * ────
- * 1. On mount, calls getOrCreateProfile() (lib/userProfile.js) which
- *    restores or creates an anonymous Supabase Auth session and ensures a
- *    user_profiles row exists (defaults only written on first insert).
- * 2. If the returned profile already has non-default vulnerability_flags or
- *    preferred_language, the user has completed onboarding before — the
- *    modal never renders (see `hasCompletedOnboarding` below).
+ * 1. On mount, reads preferences from localStorage via usePreferences()
+ *    (lib/localPreferences.ts). No auth session, no network request.
+ * 2. If the stored preferences are already non-default (flags set, language
+ *    changed, or a station chosen), the visitor has completed onboarding
+ *    before — the modal never renders.
  * 3. Otherwise renders a short form (flags, language, preferred station).
- * 4. On submit, calls updateProfile() — a real UPDATE scoped by RLS to the
- *    caller's own row, never an upsert with hardcoded defaults. Only the
- *    fields the user actually touched are sent.
+ * 4. On submit, calls updatePreferences() which merges and writes straight
+ *    to localStorage — no database round-trip of any kind.
  *
- * The completed profile is reported to the parent via onComplete so it can
- * be threaded into AdvisoryPanel without a second fetch.
+ * Intentionally does NOT import Supabase, supabaseClient, or userProfile.js.
+ * This component has zero knowledge of the database — see lib/localPreferences.ts
+ * for the full rationale (privacy: no persistent auth.users row per visitor).
  */
 
 import { useEffect, useState } from "react";
-import { getOrCreateProfile, updateProfile } from "../lib/userProfile";
-import { supabase } from "../lib/supabaseClient";
+import { usePreferences, hasCompletedOnboarding, type Preferences } from "../lib/localPreferences";
 import { getStations, type Station } from "../lib/data";
 
-export type UserProfile = {
-    id: string;
-    user_id: string;
-    name: string | null;
-    vulnerability_flags: string[];
-    preferred_station: string | null;
-    preferred_language: string;
-    created_at: string;
-};
-
 export type OnboardingModalProps = {
-    onComplete: (profile: UserProfile) => void;
+    onComplete: (preferences: Preferences) => void;
 };
 
 const VULNERABILITY_OPTIONS: { key: string; label: string }[] = [
@@ -55,120 +43,70 @@ const LANGUAGE_OPTIONS: { code: string; label: string }[] = [
     { code: "mr", label: "Marathi" },
 ];
 
-/**
- * A profile counts as "already onboarded" if it has been explicitly
- * customized away from the getOrCreateProfile() insert defaults
- * (vulnerability_flags: [], preferred_language: 'en'). This is the same
- * signal used to decide whether to show the modal at all.
- */
-function hasCompletedOnboarding(profile: UserProfile | null): boolean {
-    if (!profile) return false;
-    const hasFlags = Array.isArray(profile.vulnerability_flags) && profile.vulnerability_flags.length > 0;
-    const hasNonDefaultLanguage = !!profile.preferred_language && profile.preferred_language !== "en";
-    const hasStation = !!profile.preferred_station;
-    return hasFlags || hasNonDefaultLanguage || hasStation;
-}
-
 export default function OnboardingModal({ onComplete }: OnboardingModalProps) {
+    const { preferences, loaded, updatePreferences } = usePreferences();
+
     const [visible, setVisible] = useState(false);
-    const [loading, setLoading] = useState(true);
-    const [submitting, setSubmitting] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const [decided, setDecided] = useState(false);
 
     const [stations, setStations] = useState<Station[]>([]);
     const [flags, setFlags] = useState<Record<string, boolean>>({});
     const [language, setLanguage] = useState("en");
     const [preferredStation, setPreferredStation] = useState<string>("");
 
+    // Load the station list for the "preferred station" dropdown. This is
+    // public read-only data via lib/data.ts (Supabase), unrelated to auth.
     useEffect(() => {
         let cancelled = false;
 
-        async function init() {
-            try {
-                const [rawProfile, stationList] = await Promise.all([
-                    getOrCreateProfile(supabase),
-                    getStations(),
-                ]);
-
-                if (cancelled) return;
-
-                const profile = rawProfile as UserProfile;
-                setStations(stationList);
-
-                if (hasCompletedOnboarding(profile)) {
-                    // Already onboarded — skip the modal, hand the profile up.
-                    onComplete(profile);
-                    setVisible(false);
-                } else {
-                    setVisible(true);
-                }
-            } catch (err) {
-                if (cancelled) return;
-                console.error("[OnboardingModal] init failed:", err);
-                setError(
-                    err instanceof Error ? err.message : "Failed to load your profile."
-                );
-            } finally {
-                if (!cancelled) setLoading(false);
-            }
-        }
-
-        init();
+        getStations().then((list) => {
+            if (!cancelled) setStations(list);
+        });
 
         return () => {
             cancelled = true;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Once localStorage has been read, decide once whether to show the modal.
+    useEffect(() => {
+        if (!loaded || decided) return;
+
+        if (hasCompletedOnboarding(preferences)) {
+            onComplete(preferences);
+            setVisible(false);
+        } else {
+            setVisible(true);
+        }
+        setDecided(true);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [loaded]);
 
     const toggleFlag = (key: string) => {
         setFlags((prev) => ({ ...prev, [key]: !prev[key] }));
     };
 
-    async function handleSubmit(e: React.FormEvent) {
+    function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
-        setSubmitting(true);
-        setError(null);
 
-        try {
-            const selectedFlags = VULNERABILITY_OPTIONS
-                .map((o) => o.key)
-                .filter((key) => flags[key]);
+        const selectedFlags = VULNERABILITY_OPTIONS
+            .map((o) => o.key)
+            .filter((key) => flags[key]);
 
-            // Only send fields the user actually set — never blanket-write
-            // hardcoded defaults over whatever is already in the row.
-            const updates: Record<string, unknown> = {
-                vulnerability_flags: selectedFlags,
-                preferred_language: language,
-            };
-            if (preferredStation) {
-                updates.preferred_station = preferredStation;
-            }
-
-            await updateProfile(supabase, updates);
-
-            // Re-fetch the row so the parent gets the authoritative state
-            // (RLS scopes this to the caller's own row automatically).
-            const { data: refreshed, error: fetchError } = await supabase
-                .from("user_profiles")
-                .select("*")
-                .single();
-
-            if (fetchError) throw new Error(fetchError.message);
-
-            onComplete(refreshed as UserProfile);
-            setVisible(false);
-        } catch (err) {
-            console.error("[OnboardingModal] submit failed:", err);
-            setError(
-                err instanceof Error ? err.message : "Failed to save your preferences."
-            );
-        } finally {
-            setSubmitting(false);
+        const updates: Partial<Preferences> = {
+            vulnerability_flags: selectedFlags,
+            preferred_language: language,
+        };
+        if (preferredStation) {
+            updates.preferred_station = preferredStation;
         }
+
+        updatePreferences(updates);
+        onComplete({ ...preferences, ...updates });
+        setVisible(false);
     }
 
-    if (loading || !visible) return null;
+    if (!loaded || !visible) return null;
 
     return (
         <div
@@ -182,8 +120,8 @@ export default function OnboardingModal({ onComplete }: OnboardingModalProps) {
                     Personalize your air quality alerts
                 </h2>
                 <p className="text-white/60 text-sm mb-5">
-                    This helps us tailor health advisories to your household. You can
-                    change these later.
+                    This helps us tailor health advisories to your household. Saved only
+                    on this device — you can change these later.
                 </p>
 
                 <form onSubmit={handleSubmit} className="space-y-5">
@@ -248,16 +186,11 @@ export default function OnboardingModal({ onComplete }: OnboardingModalProps) {
                         </select>
                     </div>
 
-                    {error ? (
-                        <div className="text-red-400 text-sm">{error}</div>
-                    ) : null}
-
                     <button
                         type="submit"
-                        disabled={submitting}
-                        className="w-full bg-[#e8702a] hover:bg-[#d2611f] disabled:opacity-60 text-white text-sm font-semibold py-2.5 rounded-full transition-colors"
+                        className="w-full bg-[#e8702a] hover:bg-[#d2611f] text-white text-sm font-semibold py-2.5 rounded-full transition-colors"
                     >
-                        {submitting ? "Saving…" : "Save preferences"}
+                        Save preferences
                     </button>
                 </form>
             </div>
