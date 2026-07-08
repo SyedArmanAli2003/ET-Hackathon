@@ -1,19 +1,26 @@
 /**
  * lib/data.ts — Central data-fetching layer for SaanSLive.
  *
- * THIS IS THE ONLY FILE THAT SHOULD CHANGE when we switch from mock data
- * to live Supabase queries. No component imports Supabase directly.
+ * THIS IS THE ONLY FILE THAT SHOULD CHANGE when switching data sources.
+ * No component imports Supabase directly.
  *
  * Interfaces match the production Supabase schema exactly:
  *   - Station     ↔  public.stations
  *   - Forecast    ↔  public.forecasts
  *   - Reading     ↔  public.readings
- *
- * To swap in real data:
- *   1. Add: import { createClient } from '@supabase/supabase-js'
- *   2. Replace each function body with a supabase.from(...).select(...) call.
- *   3. Keep every function signature and return type unchanged.
  */
+
+import { createClient } from "@supabase/supabase-js";
+
+// =============================================================================
+// Supabase client — uses publishable key (safe to expose in browser)
+// =============================================================================
+
+const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseKey  = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+// Singleton — Next.js module cache keeps this alive across renders
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // =============================================================================
 // TypeScript interfaces — mirror the Supabase table schemas exactly
@@ -51,176 +58,86 @@ export interface Reading {
 }
 
 // =============================================================================
-// Mock station seed data — 5 cities with real approximate coordinates
-// station UUIDs are stable fakes so foreign-key joins work in mock mode
-// =============================================================================
-
-const MOCK_STATIONS: Station[] = [
-  {
-    id: "11111111-0000-0000-0000-000000000001",
-    external_id: "OPENAQ-DEL-001",
-    city: "Delhi",
-    name: "ITO Monitoring Station",
-    latitude: 28.6315,
-    longitude: 77.2430,
-  },
-  {
-    id: "11111111-0000-0000-0000-000000000002",
-    external_id: "OPENAQ-MUM-001",
-    city: "Mumbai",
-    name: "Bandra Kurla Complex",
-    latitude: 19.0596,
-    longitude: 72.8656,
-  },
-  {
-    id: "11111111-0000-0000-0000-000000000003",
-    external_id: "OPENAQ-BLR-001",
-    city: "Bengaluru",
-    name: "Silk Board Junction",
-    latitude: 12.9172,
-    longitude: 77.6229,
-  },
-  {
-    id: "11111111-0000-0000-0000-000000000004",
-    external_id: "OPENAQ-KOL-001",
-    city: "Kolkata",
-    name: "Rabindra Sarani",
-    latitude: 22.5726,
-    longitude: 88.3639,
-  },
-  {
-    id: "11111111-0000-0000-0000-000000000005",
-    external_id: "OPENAQ-CHE-001",
-    city: "Chennai",
-    name: "Anna Salai",
-    latitude: 13.0569,
-    longitude: 80.2425,
-  },
-];
-
-// =============================================================================
-// Baseline AQI levels per city — gives each city a realistic "character"
-// so the dashboard doesn't show identical data for every station
-// =============================================================================
-
-const CITY_BASE_AQI: Record<string, number> = {
-  Delhi: 155,
-  Mumbai: 95,
-  Bengaluru: 72,
-  Kolkata: 118,
-  Chennai: 88,
-};
-
-const CITY_BASE_PM25: Record<string, number> = {
-  Delhi: 85,
-  Mumbai: 42,
-  Bengaluru: 28,
-  Kolkata: 61,
-  Chennai: 35,
-};
-
-// =============================================================================
-// Deterministic variation — smooth sine wave so forecast looks like a real
-// diurnal AQI cycle (worse in morning rush + evening, better in afternoon)
-// =============================================================================
-
-function diurnalOffset(hourOffset: number, amplitude: number): number {
-  // Peak at hour 8 (morning rush) and hour 20 (evening traffic)
-  const baseHour = (new Date().getUTCHours() + hourOffset) % 24;
-  const morningPeak = Math.exp(-0.5 * Math.pow((baseHour - 8) / 3, 2));
-  const eveningPeak = Math.exp(-0.5 * Math.pow((baseHour - 20) / 3, 2));
-  return amplitude * (morningPeak + eveningPeak * 0.8 - 0.3);
-}
-
-// =============================================================================
 // Public API — three async functions, one per Supabase table
 // =============================================================================
 
 /**
  * Return all monitored stations.
- * Supabase equivalent: supabase.from('stations').select('*')
  */
 export async function getStations(): Promise<Station[]> {
-  // ── MOCK ── replace body with Supabase query when ready
-  return MOCK_STATIONS;
+  const { data, error } = await supabase
+    .from("stations")
+    .select("id, external_id, city, name, latitude, longitude")
+    .order("city", { ascending: true });
+
+  if (error) {
+    console.error("[getStations] Supabase error:", error.message);
+    return [];
+  }
+
+  // Cast latitude/longitude from string (Supabase numeric) to number
+  return (data ?? []).map((row) => ({
+    ...row,
+    latitude:  Number(row.latitude),
+    longitude: Number(row.longitude),
+  }));
 }
 
 /**
- * Return forecast rows for a given station, horizon_hours=6, next 24 h.
- * Rows are sorted ascending by forecast_at (earliest first).
+ * Return the most recent forecast rows for a station, horizon_hours=6.
+ * Returns up to 24 rows, sorted ascending by forecast_at (earliest first).
  *
- * Supabase equivalent:
- *   supabase.from('forecasts')
- *     .select('*')
- *     .eq('station_id', stationId)
- *     .eq('horizon_hours', 6)
- *     .gte('forecast_at', new Date().toISOString())
- *     .order('forecast_at', { ascending: true })
- *     .limit(24)
+ * If no forecasts exist for the station yet (model artifacts not trained),
+ * returns an empty array — components handle this gracefully.
  */
 export async function getLatestForecasts(stationId: string): Promise<Forecast[]> {
-  // ── MOCK ── replace body with Supabase query when ready
-  const station = MOCK_STATIONS.find((s) => s.id === stationId);
-  if (!station) return [];
+  const { data, error } = await supabase
+    .from("forecasts")
+    .select(
+      "id, station_id, forecast_at, predicted_aqi, model_version, horizon_hours, model_rmse, baseline_rmse, created_at"
+    )
+    .eq("station_id", stationId)
+    .eq("horizon_hours", 6)
+    .order("forecast_at", { ascending: true })
+    .limit(24);
 
-  const baseAqi = CITY_BASE_AQI[station.city] ?? 100;
-  const now = new Date();
-  // Round down to the nearest hour for stable mock data across renders
-  now.setMinutes(0, 0, 0);
-
-  const forecasts: Forecast[] = [];
-
-  for (let h = 1; h <= 24; h++) {
-    const forecastAt = new Date(now.getTime() + h * 60 * 60 * 1000);
-    // Smooth diurnal variation ± 25 AQI around the base
-    const variation = diurnalOffset(h, 25);
-    // Slight upward trend to simulate accumulation, small bounded noise
-    const trend = h * 0.4;
-    const predictedAqi = Math.max(
-      10,
-      Math.min(400, baseAqi + variation + trend - 8)
-    );
-
-    forecasts.push({
-      id: `mock-forecast-${stationId.slice(-1)}-h${h}`,
-      station_id: stationId,
-      forecast_at: forecastAt.toISOString(),
-      predicted_aqi: Math.round(predictedAqi * 10) / 10,
-      model_version: "xgb-v1.0",
-      horizon_hours: 6,
-      model_rmse: 14.2,
-      baseline_rmse: 28.7,
-      created_at: new Date().toISOString(),
-    });
+  if (error) {
+    console.error("[getLatestForecasts] Supabase error:", error.message);
+    return [];
   }
 
-  return forecasts;
+  return (data ?? []).map((row) => ({
+    ...row,
+    predicted_aqi: Number(row.predicted_aqi),
+    model_rmse:    row.model_rmse    != null ? Number(row.model_rmse)    : null,
+    baseline_rmse: row.baseline_rmse != null ? Number(row.baseline_rmse) : null,
+  }));
 }
 
 /**
  * Return the most recent AQI reading for a given station.
- * Supabase equivalent:
- *   supabase.from('readings')
- *     .select('station_id, timestamp, aqi, pm25')
- *     .eq('station_id', stationId)
- *     .order('timestamp', { ascending: false })
- *     .limit(1)
- *     .single()
+ * Returns null if no readings exist for the station.
  */
 export async function getCurrentReading(stationId: string): Promise<Reading | null> {
-  // ── MOCK ── replace body with Supabase query when ready
-  const station = MOCK_STATIONS.find((s) => s.id === stationId);
-  if (!station) return null;
+  const { data, error } = await supabase
+    .from("readings")
+    .select("station_id, timestamp, aqi, pm25")
+    .eq("station_id", stationId)
+    .order("timestamp", { ascending: false })
+    .limit(1)
+    .single();
 
-  const baseAqi  = CITY_BASE_AQI[station.city]  ?? 100;
-  const basePm25 = CITY_BASE_PM25[station.city] ?? 45;
-  // Current reading = base + small diurnal nudge
-  const currentOffset = diurnalOffset(0, 20);
+  if (error) {
+    // PGRST116 = no rows found — expected for stations with no readings yet
+    if (error.code !== "PGRST116") {
+      console.error("[getCurrentReading] Supabase error:", error.message);
+    }
+    return null;
+  }
 
   return {
-    station_id: stationId,
-    timestamp: new Date().toISOString(),
-    aqi:  Math.round((baseAqi  + currentOffset) * 10) / 10,
-    pm25: Math.round((basePm25 + currentOffset * 0.45) * 10) / 10,
+    ...data,
+    aqi:  Number(data.aqi),
+    pm25: Number(data.pm25),
   };
 }

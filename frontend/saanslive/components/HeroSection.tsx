@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Menu, X } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Asset image paths — drop your own paths/URLs here
@@ -134,6 +135,16 @@ function LogoMark() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Nav items — pathname-aware links
+// ─────────────────────────────────────────────────────────────────────────────
+const NAV_ITEMS = [
+  { label: "Forecast", href: "/dashboard" },
+  { label: "Map", href: "/dashboard" },
+  { label: "Health Advisory", href: "/dashboard#advisory" },
+  { label: "About", href: "/about" },
+] as const;
+
 /* Main HeroSection component */
 // ─────────────────────────────────────────────────────────────────────────────
 export default function HeroSection() {
@@ -142,6 +153,7 @@ export default function HeroSection() {
   const mouseRef = useRef({ x: -999, y: -999 });
   const smoothRef = useRef({ x: -999, y: -999 });
   const rafRef = useRef<number | null>(null);
+  const pathname = usePathname();
 
   // Smoothed cursor tracking with RAF
   useEffect(() => {
@@ -181,17 +193,21 @@ export default function HeroSection() {
 
         {/* Center pill — desktop only */}
         <div className="hidden md:flex absolute left-1/2 -translate-x-1/2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full px-2 py-2 items-center gap-1">
-          {(["Forecast", "Map", "Health Advisory", "About"] as const).map((item) => (
-            <button
-              key={item}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${item === "Forecast"
-                ? "bg-white/30 text-white"
-                : "text-white/80 hover:bg-white/20 hover:text-white"
-                }`}
-            >
-              {item}
-            </button>
-          ))}
+          {NAV_ITEMS.map((item) => {
+            const active = pathname === item.href.split("#")[0];
+            return (
+              <Link
+                key={item.label}
+                href={item.href}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${active
+                  ? "bg-white/30 text-white"
+                  : "text-white/80 hover:bg-white/20 hover:text-white"
+                  }`}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
         </div>
 
         {/* Right: desktop CTA + mobile menu toggle */}
@@ -212,15 +228,20 @@ export default function HeroSection() {
       {/* Mobile menu */}
       {mobileMenuOpen && (
         <div className="fixed inset-x-0 top-16 z-[99] bg-black/80 backdrop-blur-md border-t border-white/10 px-5 py-4 flex flex-col gap-2 md:hidden">
-          {["Forecast", "Map", "Health Advisory", "About"].map((item) => (
-            <button
-              key={item}
-              className="text-white/90 text-sm font-medium py-2.5 text-left border-b border-white/10 last:border-0 hover:text-white transition-colors"
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              {item}
-            </button>
-          ))}
+          {NAV_ITEMS.map((item) => {
+            const active = pathname === item.href.split("#")[0];
+            return (
+              <Link
+                key={item.label}
+                href={item.href}
+                className={`text-sm font-medium py-2.5 text-left border-b border-white/10 last:border-0 transition-colors ${active ? "text-white" : "text-white/90 hover:text-white"
+                  }`}
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
           <Link href="/dashboard" className="mt-2 text-center bg-[#e8702a] text-white text-sm font-semibold px-6 py-3 rounded-full w-full block">
             Get Started
           </Link>

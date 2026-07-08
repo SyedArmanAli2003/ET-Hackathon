@@ -169,17 +169,19 @@ export default function DashboardPage() {
                     <div className="flex flex-col gap-4">
                         <ForecastChart forecasts={forecasts} currentAqi={currentAqi} />
 
-                        {selectedStation ? (
-                            <AdvisoryPanel
-                                station={selectedStation}
-                                forecasts={forecasts}
-                                currentReading={currentReading}
-                            />
-                        ) : (
-                            <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
-                                Select a station to see the advisory.
-                            </div>
-                        )}
+                        <div id="advisory">
+                            {selectedStation ? (
+                                <AdvisoryPanel
+                                    station={selectedStation}
+                                    forecasts={forecasts}
+                                    currentReading={currentReading}
+                                />
+                            ) : (
+                                <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
+                                    Select a station to see the advisory.
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
 
