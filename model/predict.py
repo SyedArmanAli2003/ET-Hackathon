@@ -77,12 +77,23 @@ def _load_df(engine, query: str) -> pd.DataFrame:
     return df
 
 
-def _load_station_ids(engine) -> dict[str, str]:
-    """Return {city_lower: station_uuid} for the DB lookup when inserting."""
+def _load_station_ids(engine) -> set[str]:
+    """
+    Return the set of valid station UUIDs, for validating that a station_id
+    from the feature matrix actually exists in the stations table.
+
+    IMPORTANT: this used to return {city_lower: station_uuid}, which silently
+    collapsed multi-station cities to a single UUID (whichever row came last
+    in SQL order) -- every station in that city had its prediction written
+    under one station's identity, and the rest never got a forecast row at
+    all. `latest` (from build_latest_features) already carries the correct
+    per-row station_id, so run_inference() below uses that directly instead
+    of re-deriving it from city name.
+    """
     from sqlalchemy import text
     with engine.connect() as conn:
-        rows = conn.execute(text("SELECT city, id::text FROM stations")).fetchall()
-    return {row[0].lower(): row[1] for row in rows}
+        rows = conn.execute(text("SELECT id::text FROM stations")).fetchall()
+    return {row[0] for row in rows}
 
 
 # =============================================================================
@@ -120,7 +131,7 @@ def run_inference(
     latest: pd.DataFrame,
     model_name: str,
     horizon: int,
-    station_ids: dict[str, str],
+    valid_station_ids: set[str],
 ) -> list[dict]:
     """
     For each station in `latest` (one row per station), load its artifact,
@@ -178,10 +189,13 @@ def run_inference(
         latest_ts  = row["timestamp"]  # pd.Timestamp, UTC-aware
         forecast_at = latest_ts + timedelta(hours=horizon)
 
-        # ── 5. Resolve station_id UUID ────────────────────────────────────────
-        station_uuid = station_ids.get(city_key)
-        if station_uuid is None:
-            skipped.append((city, "city not found in stations table"))
+        # ── 5. Validate station_id UUID ───────────────────────────────────────
+        # Use the row's own station_id (already present per-row in `latest`)
+        # instead of re-deriving it from city name -- see _load_station_ids()
+        # docstring for why a city-keyed lookup silently dropped stations.
+        station_uuid = row["station_id"]
+        if station_uuid not in valid_station_ids:
+            skipped.append((city, f"station_id {station_uuid} not found in stations table"))
             continue
 
         forecasts.append({
@@ -294,12 +308,12 @@ def main() -> None:
     latest = build_latest_features(readings, weather)
     print(f"  {len(latest)} stations")
 
-    # ── Load station UUIDs ────────────────────────────────────────────────────
-    station_ids = _load_station_ids(engine)
+    # ── Load valid station UUIDs (for validation, not lookup) ────────────────
+    valid_station_ids = _load_station_ids(engine)
 
     # ── Run inference ─────────────────────────────────────────────────────────
     print(f"\nRunning inference | model={args.model} | horizon={args.horizon}h\n")
-    forecasts = run_inference(latest, args.model, args.horizon, station_ids)
+    forecasts = run_inference(latest, args.model, args.horizon, valid_station_ids)
 
     if not forecasts:
         print("\n  No predictions produced. Check that artifacts exist:")

@@ -13,7 +13,11 @@ const TECH_STACK: { category: string; items: string[] }[] = [
     },
     {
         category: "Backend & Data",
-        items: ["Supabase (Postgres, Auth, RLS)", "Python ingestion pipeline (pandas, SQLAlchemy)", "OpenAQ API v3 (PM2.5 readings)", "Open-Meteo API (weather)"],
+        items: ["Supabase (Postgres, RLS)", "Python ingestion pipeline (pandas, SQLAlchemy)", "OpenAQ API v3 (PM2.5 readings)", "Open-Meteo API (weather)"],
+    },
+    {
+        category: "Privacy",
+        items: ["No account or sign-in required", "Preferences stored locally in your browser only"],
     },
     {
         category: "Machine Learning",

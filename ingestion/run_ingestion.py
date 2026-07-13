@@ -267,12 +267,12 @@ def run_forecast(horizon: int, dry_run: bool) -> StepResult:
             ORDER BY s.city, w.timestamp""")
 
         from features import build_latest_features  # model/features.py
-        latest      = build_latest_features(readings, weather)
-        station_ids = _predict._load_station_ids(engine)
+        latest            = build_latest_features(readings, weather)
+        valid_station_ids = _predict._load_station_ids(engine)
 
         log.info("  Built latest features for %d station(s)", len(latest))
 
-        forecasts = _predict.run_inference(latest, "xgb", horizon, station_ids)
+        forecasts = _predict.run_inference(latest, "xgb", horizon, valid_station_ids)
 
         if not forecasts:
             log.warning("  No forecasts produced — no artifacts found for horizon=%dh model=xgb."

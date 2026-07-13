@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import type { Forecast, Reading, Station } from "../lib/data";
 import { getAqiBand } from "../lib/aqi";
 import { CardSkeleton } from "./Skeleton";
+import { generatePolishedAdvisory } from "../lib/generateAdvisory";
 
 export type AdvisoryPanelProps = {
     station: Station;
@@ -11,6 +12,8 @@ export type AdvisoryPanelProps = {
     currentReading: Reading | null;
     /** Vulnerability flags from the user's profile, e.g. ["children", "elderly"]. */
     vulnerabilityFlags?: string[];
+    /** BCP-47 language tag from local preferences, e.g. "en", "hi". */
+    preferredLanguage?: string;
     loading?: boolean;
     error?: string | null;
 };
@@ -58,6 +61,7 @@ export default function AdvisoryPanel({
     station,
     forecasts,
     vulnerabilityFlags,
+    preferredLanguage = "en",
     loading = false,
     error = null,
 }: AdvisoryPanelProps) {
@@ -77,6 +81,47 @@ export default function AdvisoryPanel({
             time: formatTime(peak.forecast_at),
         };
     }, [forecasts]);
+
+    // ── LLM-polish layer ─────────────────────────────────────────────────────
+    // Deliberately a SEPARATE state from `loading`/`error` above: the core
+    // forecast (advisory computed from real data) is already ready to render
+    // the moment `advisory` exists. Polishing is a non-blocking enhancement
+    // layered on top -- a slow or failed LLM call must never hold up or hide
+    // the deterministic template, which is always rendered as the baseline.
+    const [polishedText, setPolishedText] = useState<string | null>(null);
+    const [polishing, setPolishing] = useState(false);
+
+    const guidanceClause = buildGuidanceClause(vulnerabilityFlags);
+
+    useEffect(() => {
+        setPolishedText(null);
+
+        if (!advisory) return;
+
+        let cancelled = false;
+        setPolishing(true);
+
+        generatePolishedAdvisory({
+            aqiValue: advisory.value,
+            aqiCategory: advisory.band.label,
+            stationName: station.name,
+            timeLabel: advisory.time,
+            guidanceClause,
+            preferredLanguage,
+        })
+            .then((result) => {
+                if (cancelled) return;
+                if (result.polished) setPolishedText(result.polished);
+            })
+            .finally(() => {
+                if (!cancelled) setPolishing(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [advisory?.value, advisory?.band.label, station.id, guidanceClause, preferredLanguage]);
 
     if (loading) {
         return (
@@ -112,14 +157,26 @@ export default function AdvisoryPanel({
             </div>
 
             {advisory ? (
-                <div className="text-white text-sm leading-relaxed">
-                    AQI is expected to reach{" "}
-                    <span style={{ color: advisory.band.color, fontWeight: 700 }}>
-                        '{advisory.band.label}' ({advisory.value})
-                    </span>{" "}
-                    near <span style={{ fontWeight: 700 }}>{station.name}</span> by{" "}
-                    <span style={{ fontWeight: 700 }}>{advisory.time}</span> —{" "}
-                    {buildGuidanceClause(vulnerabilityFlags)}.
+                <div>
+                    {polishedText ? (
+                        <div className="text-white text-sm leading-relaxed">{polishedText}</div>
+                    ) : (
+                        <div className="text-white text-sm leading-relaxed">
+                            AQI is expected to reach{" "}
+                            <span style={{ color: advisory.band.color, fontWeight: 700 }}>
+                                '{advisory.band.label}' ({advisory.value})
+                            </span>{" "}
+                            near <span style={{ fontWeight: 700 }}>{station.name}</span> by{" "}
+                            <span style={{ fontWeight: 700 }}>{advisory.time}</span> —{" "}
+                            {guidanceClause}.
+                        </div>
+                    )}
+                    {polishing ? (
+                        <div className="flex items-center gap-1.5 mt-2 text-white/40 text-xs">
+                            <span className="inline-block w-2.5 h-2.5 rounded-full border border-white/40 border-t-transparent animate-spin" />
+                            Rephrasing…
+                        </div>
+                    ) : null}
                 </div>
             ) : (
                 <div className="text-white/60 text-sm leading-relaxed">

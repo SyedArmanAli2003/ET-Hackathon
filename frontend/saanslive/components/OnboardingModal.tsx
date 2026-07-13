@@ -50,18 +50,30 @@ export default function OnboardingModal({ onComplete }: OnboardingModalProps) {
     const [decided, setDecided] = useState(false);
 
     const [stations, setStations] = useState<Station[]>([]);
+    const [stationsError, setStationsError] = useState<string | null>(null);
     const [flags, setFlags] = useState<Record<string, boolean>>({});
     const [language, setLanguage] = useState("en");
     const [preferredStation, setPreferredStation] = useState<string>("");
 
     // Load the station list for the "preferred station" dropdown. This is
     // public read-only data via lib/data.ts (Supabase), unrelated to auth.
+    // getStations() throws on a genuine query failure, so this must be
+    // caught -- otherwise a Supabase hiccup here left the dropdown silently
+    // empty forever with an unhandled promise rejection in the console.
     useEffect(() => {
         let cancelled = false;
 
-        getStations().then((list) => {
-            if (!cancelled) setStations(list);
-        });
+        getStations()
+            .then((list) => {
+                if (!cancelled) setStations(list);
+            })
+            .catch((err) => {
+                if (cancelled) return;
+                console.error("[OnboardingModal] Failed to load stations:", err);
+                setStationsError(
+                    err instanceof Error ? err.message : "Failed to load stations."
+                );
+            });
 
         return () => {
             cancelled = true;
@@ -184,6 +196,11 @@ export default function OnboardingModal({ onComplete }: OnboardingModalProps) {
                                 </option>
                             ))}
                         </select>
+                        {stationsError ? (
+                            <div className="text-red-400 text-xs mt-1">
+                                Couldn&apos;t load the station list: {stationsError}
+                            </div>
+                        ) : null}
                     </div>
 
                     <button

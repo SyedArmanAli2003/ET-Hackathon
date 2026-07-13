@@ -54,7 +54,11 @@ export default function StationMap({ onStationSelect }: StationMapProps) {
 
                 setStations(s);
 
-                const readingResults = await Promise.all(
+                // Use allSettled, not all: a single station's reading failure
+                // (transient network blip, etc.) must not take down every
+                // other marker on the map. Failed stations just render gray
+                // (unknown AQI) instead of the whole map showing an error.
+                const readingResults = await Promise.allSettled(
                     s.map(async (station) => {
                         const r = await getCurrentReading(station.id);
                         return [station.id, r] as const;
@@ -64,7 +68,14 @@ export default function StationMap({ onStationSelect }: StationMapProps) {
                 if (cancelled) return;
 
                 const byId: Record<string, Reading | null> = {};
-                for (const [stationId, r] of readingResults) byId[stationId] = r;
+                for (const result of readingResults) {
+                    if (result.status === "fulfilled") {
+                        const [stationId, r] = result.value;
+                        byId[stationId] = r;
+                    } else {
+                        console.error("[StationMap] Failed to load a station reading:", result.reason);
+                    }
+                }
 
                 setReadingsByStationId(byId);
             } catch (err) {

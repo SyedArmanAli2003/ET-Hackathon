@@ -219,6 +219,7 @@ export default function DashboardPage() {
                                     forecasts={forecasts}
                                     currentReading={currentReading}
                                     vulnerabilityFlags={preferences.vulnerability_flags}
+                                    preferredLanguage={preferences.preferred_language}
                                     loading={stationDataLoading}
                                     error={stationDataError}
                                 />
