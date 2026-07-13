@@ -143,5 +143,74 @@ Read `README.md`, `report.md` (all sections, including previously-truncated tail
 - Dropping the duplicate index on `user_profiles` (from the advisors check, §2).
 - Manually triggering the GitHub Actions ingestion workflow (§6) — blocked on `gh` CLI install + user auth.
 
-**Outstanding user action required:**
-- Enable "Allow anonymous sign-ins" in Supabase Dashboard → Authentication → Sign In / Providers, to unblock full onboarding modal testing.
+---
+
+## 9. Drop Supabase-Backed Profiles — Switch to localStorage
+
+**Reason:** Privacy — no longer want a persistent `auth.users` record for every anonymous visitor.
+
+### Created
+- `frontend/saanslive/lib/localPreferences.ts`:
+  - `usePreferences()` hook: reads/writes `vulnerability_flags`, `preferred_language`, and `preferred_station` to localStorage under `"saanslive_preferences"`.
+  - SSR-safe (`typeof window` guard); returns `{ preferences, loaded, updatePreferences }`.
+  - `hasCompletedOnboarding(prefs)` checks for non-default values (same logic as before, no network).
+  - Full docs explaining the privacy decision and why `user_profiles` table is intentionally left in Supabase untouched.
+
+### Rewritten
+- `frontend/saanslive/components/OnboardingModal.tsx`:
+  - Same form, same fields (vulnerability checkboxes, language dropdown, preferred-station dropdown), same "only show once" behavior.
+  - Now imports **only** `usePreferences` / `hasCompletedOnboarding` from `lib/localPreferences.ts` and `getStations` from `lib/data.ts`.
+  - Zero Supabase imports. Zero auth calls. Submit writes directly to localStorage via `updatePreferences()`.
+  - `getStations()` (used for the station dropdown) is the only Supabase-touching call, and it's public read-only data via `/rest/v1/stations`, not `/auth/v1/`.
+
+### Modified
+- `frontend/saanslive/app/dashboard/page.tsx`:
+  - Replaced `profile` state + `UserProfile` type with `usePreferences()` hook.
+  - Removed import of `OnboardingModal`'s old `UserProfile` export.
+  - `OnboardingModal.onComplete` now receives a `Preferences` object; if `preferred_station` is set, it selects that station on the map.
+  - `AdvisoryPanel` receives `preferences.vulnerability_flags` directly.
+
+### Untouched (confirmed)
+- `AdvisoryPanel.tsx` — still just takes `vulnerabilityFlags?: string[]` as a prop. No changes needed.
+- `schema.sql` — `user_profiles` table, its 4 RLS policies, FK to `auth.users`, indexes — all left intact. This is intentional unused infrastructure, not a mistake (documented in `localPreferences.ts` header).
+- `lib/supabaseClient.ts` — still used by `lib/data.ts` for public read-only queries (stations, forecasts, readings). Not imported by OnboardingModal.
+- `lib/userProfile.js` — has zero importers remaining; left in the repo but effectively dead code.
+
+### Verification
+- `npx tsc --noEmit` — clean, zero errors.
+- `get_diagnostics` on all 4 changed/created files — no issues.
+- Fresh dev server: `/dashboard` returns HTTP 200, no compile/module errors in server logs.
+- Source-level grep for `.auth.`, `signInAnonymously`, `userProfile`, `supabaseClient` in the onboarding path — **zero results**.
+- This means no code path in the modal or preferences hook can produce a request to `/auth/v1/` at all.
+- `schema.sql` confirmed byte-for-byte untouched (grep found `user_profiles` still fully defined with all policies).
+
+### What could not be verified from my side
+- Actual browser DevTools Network tab confirmation of "zero /auth/v1/ requests" on a fresh incognito visit — my tools can't drive a real browser against localhost. But given the source-level absence of any auth code in the bundle path, there is no mechanism for such a request to be triggered. Manual visual confirmation recommended.
+
+---
+
+## Files touched this session (cumulative, updated)
+
+**Created:**
+- `frontend/saanslive/.env.local`
+- `frontend/saanslive/app/about/page.tsx`
+- `frontend/saanslive/lib/supabaseClient.ts`
+- `frontend/saanslive/lib/localPreferences.ts`
+- `frontend/saanslive/components/OnboardingModal.tsx` (rewritten from Supabase-backed to localStorage-backed)
+- `supabase/` (`config.toml`, `.gitignore`, `.temp/`) via `supabase init`
+- `kiro.md` (this file)
+
+**Modified:**
+- `frontend/saanslive/components/HeroSection.tsx` (nav links, active state, About re-added)
+- `frontend/saanslive/app/dashboard/page.tsx` (advisory anchor id, OnboardingModal wiring → now uses `usePreferences()` instead of Supabase profile)
+- `frontend/saanslive/components/AdvisoryPanel.tsx` (dynamic guidance clause from real flags)
+- `frontend/saanslive/lib/data.ts` (shared Supabase client import)
+- `frontend/saanslive/next.config.ts` (briefly added then reverted `externalDir`)
+
+**Moved:**
+- `frontend/lib/userProfile.js` → `frontend/saanslive/lib/userProfile.js` (now dead code — zero importers)
+
+**Not yet applied (proposed, awaiting confirmation):**
+- Dropping the duplicate index on `user_profiles` (from the advisors check, §2).
+- Manually triggering the GitHub Actions ingestion workflow (§6) — blocked on `gh` CLI install + user auth.
+- Deleting `frontend/saanslive/lib/userProfile.js` (dead code, left in place unless told to remove).
