@@ -14,10 +14,13 @@ import {
 } from "recharts";
 import type { Forecast } from "../lib/data";
 import { AQI_SEVERITY_BANDS } from "../lib/aqi";
+import { Skeleton } from "./Skeleton";
 
 export type ForecastChartProps = {
     forecasts: Forecast[];
     currentAqi: number | null;
+    loading?: boolean;
+    error?: string | null;
 };
 
 function clampFinite(max: number) {
@@ -37,6 +40,8 @@ function formatTimeLabel(iso: string) {
 export default function ForecastChart({
     forecasts,
     currentAqi,
+    loading = false,
+    error = null,
 }: ForecastChartProps) {
     const chartData = useMemo(() => {
         const sorted = [...forecasts].sort(
@@ -70,6 +75,35 @@ export default function ForecastChart({
         }));
     }, [yDomain]);
 
+    if (loading) {
+        return (
+            <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                    <Skeleton className="h-5 w-40" />
+                    <Skeleton className="h-4 w-24" />
+                </div>
+                <Skeleton className="w-full" style={{ height: 320 }} />
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
+                <h2 className="text-white font-semibold mb-2">Next 24h AQI Forecast</h2>
+                <div
+                    style={{ height: 320 }}
+                    className="flex flex-col items-center justify-center gap-2 text-center px-6"
+                >
+                    <div className="text-white/80 text-sm font-medium">
+                        Couldn&apos;t load the forecast
+                    </div>
+                    <div className="text-white/50 text-xs">{error}</div>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
             <div className="flex items-center justify-between mb-2">
@@ -83,6 +117,19 @@ export default function ForecastChart({
                 )}
             </div>
 
+            {chartData.length === 0 ? (
+                <div
+                    style={{ height: 320 }}
+                    className="flex flex-col items-center justify-center gap-1 text-center px-6"
+                >
+                    <div className="text-white/70 text-sm font-medium">
+                        No forecast available yet
+                    </div>
+                    <div className="text-white/50 text-xs">
+                        The model hasn&apos;t generated a prediction for this station yet.
+                    </div>
+                </div>
+            ) : (
             <div style={{ width: "100%", height: 320 }}>
                 <ResponsiveContainer>
                     <LineChart
@@ -165,6 +212,7 @@ export default function ForecastChart({
                     </LineChart>
                 </ResponsiveContainer>
             </div>
+            )}
         </div>
     );
 }

@@ -32,6 +32,9 @@ export default function DashboardPage() {
     const [currentReading, setCurrentReading] = useState<Reading | null>(null);
     const [forecasts, setForecasts] = useState<Forecast[]>([]);
     const [loading, setLoading] = useState(true);
+    const [stationsError, setStationsError] = useState<string | null>(null);
+    const [stationDataLoading, setStationDataLoading] = useState(true);
+    const [stationDataError, setStationDataError] = useState<string | null>(null);
     const { preferences } = usePreferences();
 
     useEffect(() => {
@@ -39,6 +42,7 @@ export default function DashboardPage() {
 
         async function loadStations() {
             setLoading(true);
+            setStationsError(null);
             try {
                 const s = await getStations();
                 if (cancelled) return;
@@ -46,6 +50,11 @@ export default function DashboardPage() {
                 if (s.length > 0 && !selectedStationId) {
                     setSelectedStationId(s[0].id);
                 }
+            } catch (err) {
+                if (cancelled) return;
+                setStationsError(
+                    err instanceof Error ? err.message : "Failed to load stations."
+                );
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -68,6 +77,8 @@ export default function DashboardPage() {
 
         async function loadStationData() {
             setLoading(true);
+            setStationDataLoading(true);
+            setStationDataError(null);
             try {
                 const [r, f] = await Promise.all([
                     getCurrentReading(stationId),
@@ -76,8 +87,18 @@ export default function DashboardPage() {
                 if (cancelled) return;
                 setCurrentReading(r);
                 setForecasts(f);
+            } catch (err) {
+                if (cancelled) return;
+                setStationDataError(
+                    err instanceof Error ? err.message : "Failed to load station data."
+                );
+                setForecasts([]);
+                setCurrentReading(null);
             } finally {
-                if (!cancelled) setLoading(false);
+                if (!cancelled) {
+                    setLoading(false);
+                    setStationDataLoading(false);
+                }
             }
         }
 
@@ -141,12 +162,18 @@ export default function DashboardPage() {
                     </p>
                 </div>
 
+                {stationsError ? (
+                    <div className="mb-4 bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-red-300 text-sm">
+                        Couldn&apos;t load stations: {stationsError}
+                    </div>
+                ) : null}
+
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <div className={darkBgCard}>
                         <div className="mb-3">
                             <div className="text-white/80 text-sm font-medium mb-2">City</div>
                             <div className="flex flex-wrap gap-2">
-                                {cities.length === 0 ? (
+                                {cities.length === 0 && !stationsError ? (
                                     <div className="text-white/60 text-sm">Loading cities…</div>
                                 ) : (
                                     cities.map((city) => {
@@ -178,7 +205,12 @@ export default function DashboardPage() {
                     </div>
 
                     <div className="flex flex-col gap-4">
-                        <ForecastChart forecasts={forecasts} currentAqi={currentAqi} />
+                        <ForecastChart
+                            forecasts={forecasts}
+                            currentAqi={currentAqi}
+                            loading={stationDataLoading}
+                            error={stationDataError}
+                        />
 
                         <div id="advisory">
                             {selectedStation ? (
@@ -187,6 +219,8 @@ export default function DashboardPage() {
                                     forecasts={forecasts}
                                     currentReading={currentReading}
                                     vulnerabilityFlags={preferences.vulnerability_flags}
+                                    loading={stationDataLoading}
+                                    error={stationDataError}
                                 />
                             ) : (
                                 <div className="bg-black/60 border border-white/10 rounded-2xl p-4">

@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import type { Forecast, Reading, Station } from "../lib/data";
 import { getAqiBand } from "../lib/aqi";
+import { CardSkeleton } from "./Skeleton";
 
 export type AdvisoryPanelProps = {
     station: Station;
@@ -10,6 +11,8 @@ export type AdvisoryPanelProps = {
     currentReading: Reading | null;
     /** Vulnerability flags from the user's profile, e.g. ["children", "elderly"]. */
     vulnerabilityFlags?: string[];
+    loading?: boolean;
+    error?: string | null;
 };
 
 const FLAG_LABELS: Record<string, string> = {
@@ -55,6 +58,8 @@ export default function AdvisoryPanel({
     station,
     forecasts,
     vulnerabilityFlags,
+    loading = false,
+    error = null,
 }: AdvisoryPanelProps) {
     const advisory = useMemo(() => {
         if (!forecasts || forecasts.length === 0) return null;
@@ -72,6 +77,33 @@ export default function AdvisoryPanel({
             time: formatTime(peak.forecast_at),
         };
     }, [forecasts]);
+
+    if (loading) {
+        return (
+            <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
+                <div className="text-white/80 text-xs tracking-wide mb-2">
+                    Air Quality Advisory
+                </div>
+                <CardSkeleton lines={2} />
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
+                <div className="text-white/80 text-xs tracking-wide mb-2">
+                    Air Quality Advisory
+                </div>
+                <div className="text-sm">
+                    <div className="text-white/80 font-medium mb-1">
+                        Couldn&apos;t load the advisory
+                    </div>
+                    <div className="text-white/50 text-xs">{error}</div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="bg-black/60 border border-white/10 rounded-2xl p-4">

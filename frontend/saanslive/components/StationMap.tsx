@@ -13,6 +13,7 @@ import {
     type Station,
 } from "../lib/data";
 import { getAqiBand } from "../lib/aqi";
+import { Skeleton } from "./Skeleton";
 
 export type StationMapProps = {
     onStationSelect: (stationId: string) => void;
@@ -39,12 +40,14 @@ export default function StationMap({ onStationSelect }: StationMapProps) {
         Record<string, Reading | null>
     >({});
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
 
         async function load() {
             setLoading(true);
+            setError(null);
             try {
                 const s = await getStations();
                 if (cancelled) return;
@@ -64,6 +67,11 @@ export default function StationMap({ onStationSelect }: StationMapProps) {
                 for (const [stationId, r] of readingResults) byId[stationId] = r;
 
                 setReadingsByStationId(byId);
+            } catch (err) {
+                if (cancelled) return;
+                setError(
+                    err instanceof Error ? err.message : "Failed to load the map."
+                );
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -81,6 +89,26 @@ export default function StationMap({ onStationSelect }: StationMapProps) {
         []
     );
 
+    if (loading) {
+        return (
+            <Skeleton className="w-full" style={{ height: "520px", borderRadius: 16 }} />
+        );
+    }
+
+    if (error) {
+        return (
+            <div
+                style={{ height: "520px" }}
+                className="w-full rounded-2xl border border-white/10 bg-black/60 flex flex-col items-center justify-center gap-2 text-center px-6"
+            >
+                <div className="text-white/80 text-sm font-medium">
+                    Couldn&apos;t load the map
+                </div>
+                <div className="text-white/50 text-xs">{error}</div>
+            </div>
+        );
+    }
+
     return (
         <div
             style={{
@@ -89,24 +117,6 @@ export default function StationMap({ onStationSelect }: StationMapProps) {
                 position: "relative",
             }}
         >
-            {loading && (
-                <div
-                    style={{
-                        position: "absolute",
-                        inset: 0,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: "rgba(255,255,255,0.7)",
-                        zIndex: 1000,
-                        fontSize: 14,
-                        color: "#111827",
-                    }}
-                >
-                    Loading map…
-                </div>
-            )}
-
             <MapContainer
                 center={indiaCenter}
                 zoom={4.7}

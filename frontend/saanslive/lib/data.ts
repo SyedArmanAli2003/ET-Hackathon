@@ -53,6 +53,11 @@ export interface Reading {
 
 /**
  * Return all monitored stations.
+ *
+ * Throws on a genuine query failure (network/RLS/etc.) so callers can show
+ * a distinct error state. An empty result with no error (zero stations) is
+ * NOT an error — it's returned as an empty array for callers to handle as
+ * a legitimate "no data" case.
  */
 export async function getStations(): Promise<Station[]> {
   const { data, error } = await supabase
@@ -62,7 +67,7 @@ export async function getStations(): Promise<Station[]> {
 
   if (error) {
     console.error("[getStations] Supabase error:", error.message);
-    return [];
+    throw new Error("Failed to load stations. Please try again.");
   }
 
   // Cast latitude/longitude from string (Supabase numeric) to number
@@ -78,7 +83,11 @@ export async function getStations(): Promise<Station[]> {
  * Returns up to 24 rows, sorted ascending by forecast_at (earliest first).
  *
  * If no forecasts exist for the station yet (model artifacts not trained),
- * returns an empty array — components handle this gracefully.
+ * returns an empty array — this is a legitimate "no data" case, not an
+ * error, and components render a dedicated empty state for it.
+ *
+ * Throws on a genuine query failure so callers can show a distinct error
+ * state instead of silently treating it the same as "no forecasts yet".
  */
 export async function getLatestForecasts(stationId: string): Promise<Forecast[]> {
   const { data, error } = await supabase
@@ -93,7 +102,7 @@ export async function getLatestForecasts(stationId: string): Promise<Forecast[]>
 
   if (error) {
     console.error("[getLatestForecasts] Supabase error:", error.message);
-    return [];
+    throw new Error("Failed to load the forecast. Please try again.");
   }
 
   return (data ?? []).map((row) => ({
@@ -106,7 +115,11 @@ export async function getLatestForecasts(stationId: string): Promise<Forecast[]>
 
 /**
  * Return the most recent AQI reading for a given station.
- * Returns null if no readings exist for the station.
+ * Returns null if no readings exist for the station (legitimate "no data",
+ * PGRST116 = no rows found — expected for stations with no readings yet).
+ *
+ * Throws on any other query failure so callers can distinguish "no reading
+ * yet" from "the request actually failed".
  */
 export async function getCurrentReading(stationId: string): Promise<Reading | null> {
   const { data, error } = await supabase
@@ -118,11 +131,12 @@ export async function getCurrentReading(stationId: string): Promise<Reading | nu
     .single();
 
   if (error) {
-    // PGRST116 = no rows found — expected for stations with no readings yet
-    if (error.code !== "PGRST116") {
-      console.error("[getCurrentReading] Supabase error:", error.message);
+    if (error.code === "PGRST116") {
+      // No rows found — legitimate empty state, not an error.
+      return null;
     }
-    return null;
+    console.error("[getCurrentReading] Supabase error:", error.message);
+    throw new Error("Failed to load the current reading. Please try again.");
   }
 
   return {
