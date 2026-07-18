@@ -37,7 +37,7 @@ export default function DashboardPage() {
     const [stationsError, setStationsError] = useState<string | null>(null);
     const [stationDataLoading, setStationDataLoading] = useState(true);
     const [stationDataError, setStationDataError] = useState<string | null>(null);
-    const { preferences } = usePreferences();
+    const { preferences, updatePreferences } = usePreferences();
 
     useEffect(() => {
         let cancelled = false;
@@ -159,6 +159,7 @@ export default function DashboardPage() {
         <div className="min-h-screen bg-black text-white">
             <OnboardingModal
                 onComplete={(prefs) => {
+                    updatePreferences(prefs);
                     if (prefs.preferred_station) {
                         setSelectedStationId(prefs.preferred_station);
                     }

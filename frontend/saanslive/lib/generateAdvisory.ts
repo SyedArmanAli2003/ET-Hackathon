@@ -1,3 +1,5 @@
+import { isNimModelId, type NimModelId } from "./nimModels";
+
 /**
  * lib/generateAdvisory.ts — LLM-polish layer for the advisory sentence.
  *
@@ -8,7 +10,7 @@
  * RELIABILITY CONTRACT
  * ---------------------
  * This function NEVER throws. It always resolves to either:
- *   - { polished: string, provider: "openrouter" | "nvidia_nim" }  (success)
+ *   - { polished: string, provider: "nvidia_nim" }                 (success)
  *   - { polished: null }                                           (fall back)
  *
  * Callers must render the deterministic template when `polished` is null.
@@ -26,13 +28,14 @@ export type AdvisoryPolishInput = {
     timeLabel: string;
     guidanceClause: string;
     preferredLanguage: string;
+    model: NimModelId;
 };
 
 export type AdvisoryPolishResult =
-    | { polished: string; provider: "openrouter" | "nvidia_nim" }
+    | { polished: string; provider: "nvidia_nim"; model: NimModelId }
     | { polished: null };
 
-const CLIENT_TIMEOUT_MS = 7000;
+const CLIENT_TIMEOUT_MS = 50_000;
 
 export async function generatePolishedAdvisory(
     input: AdvisoryPolishInput
@@ -53,8 +56,17 @@ export async function generatePolishedAdvisory(
         }
 
         const json = await res.json();
-        if (typeof json?.polished === "string" && json.polished.trim().length > 0) {
-            return { polished: json.polished.trim(), provider: json.provider };
+        if (
+            typeof json?.polished === "string" &&
+            json.polished.trim().length > 0 &&
+            json?.provider === "nvidia_nim" &&
+            isNimModelId(json?.model)
+        ) {
+            return {
+                polished: json.polished.trim(),
+                provider: "nvidia_nim",
+                model: json.model,
+            };
         }
         return { polished: null };
     } catch (err) {

@@ -9,9 +9,8 @@
  * ────
  * 1. On mount, reads preferences from localStorage via usePreferences()
  *    (lib/localPreferences.ts). No auth session, no network request.
- * 2. If the stored preferences are already non-default (flags set, language
- *    changed, or a station chosen), the visitor has completed onboarding
- *    before — the modal never renders.
+ * 2. If the stored preferences record that onboarding was completed, the
+ *    modal never renders — even when the visitor kept every default choice.
  * 3. Otherwise renders a short form (flags, language, preferred station).
  * 4. On submit, calls updatePreferences() which merges and writes straight
  *    to localStorage — no database round-trip of any kind.
@@ -108,6 +107,7 @@ export default function OnboardingModal({ onComplete }: OnboardingModalProps) {
         const updates: Partial<Preferences> = {
             vulnerability_flags: selectedFlags,
             preferred_language: language,
+            onboarding_completed: true,
         };
         if (preferredStation) {
             updates.preferred_station = preferredStation;

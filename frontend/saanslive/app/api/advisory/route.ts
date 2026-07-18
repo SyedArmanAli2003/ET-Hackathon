@@ -3,20 +3,17 @@
  *
  * WHY A SERVER ROUTE
  * -------------------
- * AdvisoryPanel is a client component. OpenRouter/NVIDIA NIM API keys must
+ * AdvisoryPanel is a client component. The NVIDIA NIM API key must
  * never reach the browser bundle, so this route holds the secrets and the
  * client (lib/generateAdvisory.ts) POSTs the already-computed template data
- * here instead of calling either provider directly.
+ * here instead of calling NVIDIA directly.
  *
- * PROVIDERS
- * ---------
- * 1. OpenRouter (model "openrouter/free") — tried first.
- * 2. NVIDIA NIM — fallback if OpenRouter fails/times out. Model configurable
- *    via NVIDIA_NIM_MODEL env var; swap this value whenever you decide which
- *    NIM model to use, no code change needed.
- * 3. If both fail (or neither API key is configured), returns { polished: null }
- *    so the client falls back to the deterministic template. This route is
- *    NEVER the only path to a displayed advisory.
+ * PROVIDER
+ * --------
+ * NVIDIA NIM using a model selected from a server-side allowlist. If the
+ * request fails or the key is not configured, the route returns { polished: null }
+ * so the client falls back to the deterministic template. This route is
+ * NEVER the only path to a displayed advisory.
  *
  * SAFETY
  * ------
@@ -28,6 +25,12 @@
  */
 
 import { NextResponse } from "next/server";
+import {
+    DEFAULT_NIM_MODEL,
+    isNimModelId,
+    NIM_GENERATION_SETTINGS,
+    type NimModelId,
+} from "../../../lib/nimModels";
 
 export const runtime = "nodejs";
 
@@ -38,17 +41,16 @@ type AdvisoryRequestBody = {
     timeLabel: string;
     guidanceClause: string;
     preferredLanguage: string;
+    model?: NimModelId;
 };
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_MODEL = "openrouter/free";
-
 const NVIDIA_NIM_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-// Swap this to whichever NIM model you decide on later -- no other code
-// needs to change.
-const NVIDIA_NIM_MODEL = process.env.NVIDIA_NIM_MODEL || "meta/llama-3.1-8b-instruct";
+const configuredModel = process.env.NVIDIA_NIM_MODEL;
+const NVIDIA_NIM_MODEL = isNimModelId(configuredModel)
+    ? configuredModel
+    : DEFAULT_NIM_MODEL;
 
-const REQUEST_TIMEOUT_MS = 6000;
+const REQUEST_TIMEOUT_MS = 45_000;
 
 function buildPrompt(body: AdvisoryRequestBody): string {
     return `You are rephrasing an air quality advisory sentence for a dashboard. Rewrite the following facts as ONE natural, plain sentence in ${body.preferredLanguage === "en" ? "English" : `the language with BCP-47 code "${body.preferredLanguage}"`}.
@@ -71,26 +73,28 @@ Rules:
 async function callChatCompletions(
     url: string,
     apiKey: string,
-    model: string,
-    prompt: string,
-    extraHeaders?: Record<string, string>
+    model: NimModelId,
+    prompt: string
 ): Promise<string | null> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
+        const settings = NIM_GENERATION_SETTINGS[model];
         const res = await fetch(url, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
+                Accept: "application/json",
                 Authorization: `Bearer ${apiKey}`,
-                ...extraHeaders,
             },
             body: JSON.stringify({
                 model,
                 messages: [{ role: "user", content: prompt }],
-                temperature: 0.4,
-                max_tokens: 120,
+                temperature: settings.temperature,
+                top_p: settings.topP,
+                max_tokens: settings.maxTokens,
+                stream: false,
             }),
             signal: controller.signal,
         });
@@ -136,42 +140,39 @@ export async function POST(request: Request) {
 
     const preferredLanguage =
         typeof body.preferredLanguage === "string" ? body.preferredLanguage : "en";
-    const prompt = buildPrompt({ ...body, preferredLanguage });
+    const selectedModel = body.model ?? NVIDIA_NIM_MODEL;
 
-    const openRouterKey = process.env.OPENROUTER_API_KEY;
-    const nvidiaKey = process.env.NVIDIA_NIM_API_KEY;
-
-    // ── 1. Try OpenRouter first ────────────────────────────────────────────
-    if (openRouterKey) {
-        const polished = await callChatCompletions(
-            OPENROUTER_URL,
-            openRouterKey,
-            OPENROUTER_MODEL,
-            prompt,
-            {
-                // Recommended by OpenRouter for attribution/rate-limit purposes.
-                "HTTP-Referer": "https://saanslive.vercel.app",
-                "X-Title": "SaanSLive",
-            }
-        );
-        if (polished) {
-            return NextResponse.json({ polished, provider: "openrouter" });
-        }
+    if (!isNimModelId(selectedModel)) {
+        return NextResponse.json({ polished: null, reason: "invalid_model" }, { status: 400 });
     }
 
-    // ── 2. Fallback to NVIDIA NIM ──────────────────────────────────────────
+    const prompt = buildPrompt({ ...body, preferredLanguage });
+
+    const nvidiaKey = process.env.NVIDIA_NIM_API_KEY;
+
     if (nvidiaKey) {
+        console.info("[advisory-api] Calling NVIDIA NIM", {
+            model: selectedModel,
+            preferredLanguage,
+        });
         const polished = await callChatCompletions(
             NVIDIA_NIM_URL,
             nvidiaKey,
-            NVIDIA_NIM_MODEL,
+            selectedModel,
             prompt
         );
         if (polished) {
-            return NextResponse.json({ polished, provider: "nvidia_nim" });
+            console.info("[advisory-api] NVIDIA NIM response received", {
+                model: selectedModel,
+            });
+            return NextResponse.json({
+                polished,
+                provider: "nvidia_nim",
+                model: selectedModel,
+            });
         }
     }
 
-    // ── 3. Both failed or neither configured — caller falls back to template ──
+    // NVIDIA NIM failed or is not configured — caller falls back to template.
     return NextResponse.json({ polished: null, reason: "no_provider_succeeded" });
 }

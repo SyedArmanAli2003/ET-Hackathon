@@ -5,6 +5,12 @@ import type { Forecast, Reading, Station } from "../lib/data";
 import { getAqiBand } from "../lib/aqi";
 import { CardSkeleton } from "./Skeleton";
 import { generatePolishedAdvisory } from "../lib/generateAdvisory";
+import {
+    DEFAULT_NIM_MODEL,
+    isNimModelId,
+    NIM_MODELS,
+    type NimModelId,
+} from "../lib/nimModels";
 
 export type AdvisoryPanelProps = {
     station: Station;
@@ -90,6 +96,7 @@ export default function AdvisoryPanel({
     // the deterministic template, which is always rendered as the baseline.
     const [polishedText, setPolishedText] = useState<string | null>(null);
     const [polishing, setPolishing] = useState(false);
+    const [selectedModel, setSelectedModel] = useState<NimModelId>(DEFAULT_NIM_MODEL);
 
     const guidanceClause = buildGuidanceClause(vulnerabilityFlags);
 
@@ -108,6 +115,7 @@ export default function AdvisoryPanel({
             timeLabel: advisory.time,
             guidanceClause,
             preferredLanguage,
+            model: selectedModel,
         })
             .then((result) => {
                 if (cancelled) return;
@@ -121,7 +129,7 @@ export default function AdvisoryPanel({
             cancelled = true;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [advisory?.value, advisory?.band.label, station.id, guidanceClause, preferredLanguage]);
+    }, [advisory?.value, advisory?.band.label, station.id, guidanceClause, preferredLanguage, selectedModel]);
 
     if (loading) {
         return (
@@ -154,6 +162,32 @@ export default function AdvisoryPanel({
         <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
             <div className="text-white/80 text-xs tracking-wide mb-2">
                 Air Quality Advisory
+            </div>
+
+            <div className="mb-3">
+                <label htmlFor="advisory-model" className="block text-white/50 text-xs mb-1">
+                    AI model
+                </label>
+                <select
+                    id="advisory-model"
+                    value={selectedModel}
+                    onChange={(event) => {
+                        if (isNimModelId(event.target.value)) {
+                            setSelectedModel(event.target.value);
+                        }
+                    }}
+                    disabled={polishing}
+                    className="w-full rounded-lg border border-white/15 bg-black/40 px-2.5 py-2 text-sm text-white outline-none transition focus:border-cyan-300/70 disabled:cursor-wait disabled:opacity-60"
+                >
+                    {NIM_MODELS.map((model) => (
+                        <option key={model.id} value={model.id} className="bg-slate-950">
+                            {model.label}
+                        </option>
+                    ))}
+                </select>
+                <p className="mt-1 text-white/35 text-xs">
+                    {NIM_MODELS.find((model) => model.id === selectedModel)?.description}
+                </p>
             </div>
 
             {advisory ? (

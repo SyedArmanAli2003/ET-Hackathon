@@ -23,12 +23,14 @@ export type Preferences = {
     vulnerability_flags: string[];
     preferred_language: string;
     preferred_station: string | null;
+    onboarding_completed: boolean;
 };
 
 const DEFAULT_PREFERENCES: Preferences = {
     vulnerability_flags: [],
     preferred_language: "en",
     preferred_station: null,
+    onboarding_completed: false,
 };
 
 /**
@@ -44,18 +46,28 @@ function readPreferences(): Preferences {
         if (!raw) return DEFAULT_PREFERENCES;
 
         const parsed = JSON.parse(raw);
+        const vulnerabilityFlags = Array.isArray(parsed.vulnerability_flags)
+            ? parsed.vulnerability_flags
+            : DEFAULT_PREFERENCES.vulnerability_flags;
+        const preferredLanguage =
+            typeof parsed.preferred_language === "string"
+                ? parsed.preferred_language
+                : DEFAULT_PREFERENCES.preferred_language;
+        const preferredStation =
+            typeof parsed.preferred_station === "string"
+                ? parsed.preferred_station
+                : DEFAULT_PREFERENCES.preferred_station;
+
         return {
-            vulnerability_flags: Array.isArray(parsed.vulnerability_flags)
-                ? parsed.vulnerability_flags
-                : DEFAULT_PREFERENCES.vulnerability_flags,
-            preferred_language:
-                typeof parsed.preferred_language === "string"
-                    ? parsed.preferred_language
-                    : DEFAULT_PREFERENCES.preferred_language,
-            preferred_station:
-                typeof parsed.preferred_station === "string"
-                    ? parsed.preferred_station
-                    : DEFAULT_PREFERENCES.preferred_station,
+            vulnerability_flags: vulnerabilityFlags,
+            preferred_language: preferredLanguage,
+            preferred_station: preferredStation,
+            // Migrate earlier completed profiles that predate this explicit flag.
+            onboarding_completed:
+                parsed.onboarding_completed === true ||
+                vulnerabilityFlags.length > 0 ||
+                preferredLanguage !== DEFAULT_PREFERENCES.preferred_language ||
+                !!preferredStation,
         };
     } catch (err) {
         console.warn("[localPreferences] Failed to parse stored preferences:", err);
@@ -73,14 +85,11 @@ function writePreferences(prefs: Preferences): void {
 }
 
 /**
- * True once the visitor has explicitly set anything away from defaults —
- * used to decide whether the onboarding modal should show at all.
+ * True once the visitor submits onboarding. This is separate from preference
+ * values so accepting the default selections still means "don't show again."
  */
 export function hasCompletedOnboarding(prefs: Preferences): boolean {
-    const hasFlags = prefs.vulnerability_flags.length > 0;
-    const hasNonDefaultLanguage = prefs.preferred_language !== "en";
-    const hasStation = !!prefs.preferred_station;
-    return hasFlags || hasNonDefaultLanguage || hasStation;
+    return prefs.onboarding_completed;
 }
 
 export type UsePreferencesResult = {

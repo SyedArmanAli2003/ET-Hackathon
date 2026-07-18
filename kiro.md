@@ -395,14 +395,13 @@ AdvisoryPanel.tsx (client)
       │  fires a separate, non-blocking effect:
       ▼
 lib/generateAdvisory.ts (client)
-      │  POSTs {aqiValue, aqiCategory, stationName, timeLabel, guidanceClause, preferredLanguage}
-      │  7s client-side AbortController timeout
+      │  POSTs {aqiValue, aqiCategory, stationName, timeLabel, guidanceClause, preferredLanguage, model}
+      │  50s client-side AbortController timeout
       ▼
 app/api/advisory/route.ts (server, Node runtime)
-      │  holds OPENROUTER_API_KEY / NVIDIA_NIM_API_KEY -- never sent to the browser
-      │  1. Try OpenRouter (model "openrouter/free"), 6s server-side timeout
-      │  2. If that fails/times out/not configured -- try NVIDIA NIM (model configurable via NVIDIA_NIM_MODEL)
-      │  3. If both fail or neither key is set -- return { polished: null }
+      │  holds NVIDIA_NIM_API_KEY -- never sent to the browser
+      │  calls NVIDIA NIM with a server-validated user-selected model, with a 45s server-side timeout
+      │  if it fails, times out, or is not configured, returns the deterministic template
       ▼
 Client renders polished text if present, else the original template.
 A small spinner + "Rephrasing…" label shows only during this step, separate
@@ -410,39 +409,39 @@ from the main loading/error state used for the core forecast data.
 ```
 
 ### Files created
-- `app/api/advisory/route.ts` — server-side proxy. Validates the request body, builds the rephrasing prompt (explicitly instructs the model not to change the AQI value/category, stay factual, one sentence, no invented numbers, no alarmism), tries OpenRouter then NVIDIA NIM, defensively collapses the response to its first line in case the model ignores the "one sentence" instruction, and always returns a well-formed `{ polished: string | null }` — never throws to the caller.
+- `app/api/advisory/route.ts` — server-side NVIDIA NIM proxy. It validates the request body, builds the rephrasing prompt (explicitly instructing the model not to change the AQI value/category, stay factual, use one sentence, include no invented numbers, and avoid alarmism), defensively collapses the response to its first line, and always returns a well-formed `{ polished: string | null }` — never throwing to the caller.
 - `lib/generateAdvisory.ts` — client helper `generatePolishedAdvisory()`. Never throws; any failure (network, timeout, bad JSON, non-2xx) resolves to `{ polished: null }` so the caller's fallback path is always simple and synchronous.
+- `lib/nimModels.ts` — shared NVIDIA NIM allowlist and generation settings for Llama 3.3 70B, MiniMax M3, and GPT-OSS 120B.
 
 ### Files modified
 - `components/AdvisoryPanel.tsx`:
   - New `preferredLanguage` prop (defaults to `"en"`).
-  - New `polishedText`/`polishing` state, driven by its own `useEffect` keyed on `[advisory?.value, advisory?.band.label, station.id, guidanceClause, preferredLanguage]` — re-fires only when the underlying facts actually change, not on every render.
+  - New `polishedText`/`polishing` state plus an AI-model selector, driven by its own `useEffect` keyed on `[advisory?.value, advisory?.band.label, station.id, guidanceClause, preferredLanguage, selectedModel]`.
   - Render logic: if `polishedText` is set, show it; otherwise show the exact original template sentence unchanged. The `polishing` spinner renders inside the advisory block *underneath* whichever text is currently showing — it does not gate or delay the advisory's initial appearance in any way. The template (or a previous polish result) is visible immediately; the spinner is purely an "in progress, might upgrade in place" indicator.
 - `app/dashboard/page.tsx` — passes `preferredLanguage={preferences.preferred_language}` into `AdvisoryPanel`, alongside the existing `vulnerabilityFlags` prop.
-- `.env.local` — appended commented-out `OPENROUTER_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_MODEL` placeholders. No real keys were available in this session; the feature was built, tested, and verified to fail gracefully with both unset (the current state).
+- `.env.local` — contains the ignored, server-only `NVIDIA_NIM_API_KEY` and `NVIDIA_NIM_MODEL` configuration. The feature retains a deterministic fallback if NVIDIA NIM is unavailable.
 
 ### Fallback behavior (built-in, not optional)
 Per the explicit requirement, the LLM is never the only path:
-1. If neither API key is configured (current state) → route returns `{ polished: null }` immediately.
-2. If OpenRouter's call throws, times out (>6s server-side), or returns a non-2xx/malformed response → falls through to NVIDIA NIM.
-3. If NVIDIA NIM also fails or isn't configured → `{ polished: null }`.
-4. On the client, any network failure, abort (>7s client-side timeout), or non-2xx response also resolves to `{ polished: null }`.
+1. If the NVIDIA NIM API key is not configured → route returns `{ polished: null }` immediately.
+2. If NVIDIA NIM's call throws, times out (>45s server-side), or returns a non-2xx/malformed response → `{ polished: null }`.
+3. On the client, any network failure, abort (>50s client-side timeout), or non-2xx response also resolves to `{ polished: null }`.
 5. Whenever `polished` is null at any point in that chain, `AdvisoryPanel` renders the original deterministic template — the exact same sentence structure that existed before this feature, unchanged.
 
-### NVIDIA NIM as configurable fallback
-Per your note that you'd specify the NIM model later: `NVIDIA_NIM_MODEL` is a plain env var read once in `route.ts` (`process.env.NVIDIA_NIM_MODEL || "meta/llama-3.1-8b-instruct"` as a placeholder default) — changing which NIM model is used requires no code change, just updating that one env var.
+### NVIDIA NIM configuration
+The frontend offers Llama 3.3 70B, MiniMax M3, and GPT-OSS 120B. The server accepts only those allowlisted IDs and uses `NVIDIA_NIM_MODEL` as its fallback when no model is sent.
 
 ### Verification performed
-- `npx tsc --noEmit` — clean.
-- `get_diagnostics` on all 4 touched/created files — clean.
-- `npm run build` — clean production build; confirmed `/api/advisory` registered as a dynamic (server-rendered on demand) route, distinct from the static `/`, `/about`, `/dashboard` routes.
+- Focused `npx tsc --noEmit` on the NIM selector, request helper, route, and allowlist — clean.
+- NVIDIA's model-list endpoint verified the configured credential can access all three allowlisted models.
+- `npm run build` compiles the app but stops during type-checking on the pre-existing `HeroSection.tsx` nullability error, unrelated to the advisory feature.
 - Ran the dev server and POSTed directly to `/api/advisory`:
   - Malformed body → `400 {"polished":null,"reason":"invalid_body"}` (correct validation).
   - Valid body, no API keys configured (current real state) → `200 {"polished":null,"reason":"no_provider_succeeded"}` — confirms the "neither key set" fallback path works exactly as designed, not just in theory.
 - `/dashboard` still returns 200 with no compile errors after wiring the new component prop and effect in.
 
 ### Known limitation — not yet fixable without your input
-No OpenRouter or NVIDIA NIM API key was available in this session, so the "happy path" (an actual polished sentence coming back from a real LLM call) has not been observed end-to-end — only the fallback path has been verified live. Once you provide an `OPENROUTER_API_KEY` (and optionally `NVIDIA_NIM_API_KEY` + your chosen `NVIDIA_NIM_MODEL`), set them in `.env.local` for local dev and as Vercel production env vars for the live site, and the polish layer will activate automatically with zero code changes.
+The NVIDIA NIM configuration is stored in `.env.local` for local development. Add the same `NVIDIA_NIM_API_KEY` and `NVIDIA_NIM_MODEL` variables to the production deployment environment for the polish layer to operate there.
 
 ---
 
@@ -464,6 +463,6 @@ For completeness, the full sequence of user requests handled across this entire 
 12. **DevTools-style diagnostic request re: Supabase Auth requests** — since no real browser/DevTools tool is available, verified equivalent facts server-side: `vercel env ls` showed vars set, direct `curl` to the Supabase REST endpoint succeeded, and the actual deployed JS bundle was fetched and grepped, confirming the correct URL/key and query functions were baked in and executing successfully in production. Concluded no bug existed to report.
 13. **Diagnostic: distinct city count, trained models, city gap, and root-cause a specific "trained but no forecast" case** — ran real SQL (`COUNT(DISTINCT city)` = 20), listed real artifact filenames (10 cities), computed the city gap (10 cities with stations but no model), and root-caused Anand Vihar's missing forecast down to the exact line of code in `predict.py`'s `_load_station_ids()` city-keyed dict collision bug — confirmed by importing and running the actual function against the live DB, not simulated. (§10)
 14. **Retrain against current station list + full QA pass fixing all hidden bugs** — reran `train.py` live (18/20 cities now trained, 2 permanently blocked by zero-reading data gaps for Kochi/Visakhapatnam), fixed the `_load_station_ids()` bug diagnosed in the prior task (dict → set, use per-row `station_id` directly), verified with real before/after forecast counts (19→39, 0 conflicts), then found and fixed 3 more real frontend bugs during a full component-by-component QA re-read: `StationMap`'s `Promise.all` → `Promise.allSettled` (one station's failure no longer takes down the whole map), `OnboardingModal`'s unhandled promise rejection on `getStations()` failure, and `about/page.tsx`'s stale "Supabase Auth" claim post-privacy-migration. Redeployed to Vercel. (§10, §11)
-15. **This task — LLM-polish layer for AdvisoryPanel** — built the full OpenRouter → NVIDIA NIM → template fallback chain via a server-side API route (`app/api/advisory/route.ts`) plus a client helper (`lib/generateAdvisory.ts`), wired a non-blocking `polishing` state into `AdvisoryPanel.tsx` with its own spinner separate from the main data-loading state, and verified the full fallback contract works end-to-end with real HTTP requests against a running dev server (currently exercising the "no API keys configured" path, since no keys were provided this session). (§12)
+15. **This task — LLM-polish layer for AdvisoryPanel** — uses a NVIDIA NIM → template fallback chain via a server-side API route (`app/api/advisory/route.ts`) plus a client helper (`lib/generateAdvisory.ts`), with a non-blocking `polishing` state in `AdvisoryPanel.tsx` and its own spinner separate from the main data-loading state. (§12)
 
 Every task in this list has been executed to completion or has its exact blocking reason documented above (Kochi/Visakhapatnam sensor gap, GitHub Actions manual trigger needing `gh` CLI auth, LLM happy-path needing API keys). Nothing was silently dropped.
