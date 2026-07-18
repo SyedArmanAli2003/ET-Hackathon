@@ -21,6 +21,7 @@ import ForecastChart from "../../components/ForecastChart";
 import AdvisoryPanel from "../../components/AdvisoryPanel";
 import OnboardingModal from "../../components/OnboardingModal";
 import { usePreferences } from "../../lib/localPreferences";
+import { findNearestStation, requestGeolocation } from "../../lib/geolocation";
 
 const darkBgCard =
     "bg-black/70 border border-white/10 rounded-2xl p-4 backdrop-blur-md";
@@ -39,6 +40,11 @@ export default function DashboardPage() {
     const [stationDataError, setStationDataError] = useState<string | null>(null);
     const { preferences, updatePreferences } = usePreferences();
 
+    // "geo" = auto-selected via browser geolocation, "default" = fell back
+    // to the existing has-data heuristic. Drives the small indicator UI.
+    // Purely informational -- never blocks anything.
+    const [locationSource, setLocationSource] = useState<"geo" | "default" | null>(null);
+
     useEffect(() => {
         let cancelled = false;
 
@@ -46,21 +52,33 @@ export default function DashboardPage() {
             setLoading(true);
             setStationsError(null);
             try {
-                const [s, stationIdsWithForecasts, stationIdsWithReadings] = await Promise.all([
+                const [s, stationIdsWithForecasts, stationIdsWithReadings, geo] = await Promise.all([
                     getStations(),
                     getStationIdsWithForecasts(),
                     getStationIdsWithReadings(),
+                    requestGeolocation(),
                 ]);
                 if (cancelled) return;
                 setStations(s);
                 if (s.length > 0 && !selectedStationId) {
-                    // Best default: a station with BOTH a current reading and a forecast.
-                    // Fallback chain: both → has forecast only → first station.
-                    const withBoth = s.find(
-                        (st) => stationIdsWithForecasts.has(st.id) && stationIdsWithReadings.has(st.id)
-                    );
-                    const withForecast = s.find((st) => stationIdsWithForecasts.has(st.id));
-                    setSelectedStationId((withBoth ?? withForecast ?? s[0]).id);
+                    // Priority 1: nearest station to the user's real location,
+                    // if geolocation permission was granted (never blocks --
+                    // requestGeolocation() always resolves, never rejects).
+                    const nearest = geo ? findNearestStation(s, geo.lat, geo.lon) : null;
+
+                    if (nearest) {
+                        setSelectedStationId(nearest.id);
+                        setLocationSource("geo");
+                    } else {
+                        // Fallback (unchanged): a station with BOTH a current
+                        // reading and a forecast. Chain: both → forecast only → first.
+                        const withBoth = s.find(
+                            (st) => stationIdsWithForecasts.has(st.id) && stationIdsWithReadings.has(st.id)
+                        );
+                        const withForecast = s.find((st) => stationIdsWithForecasts.has(st.id));
+                        setSelectedStationId((withBoth ?? withForecast ?? s[0]).id);
+                        setLocationSource("default");
+                    }
                 }
             } catch (err) {
                 if (cancelled) return;
@@ -151,6 +169,7 @@ export default function DashboardPage() {
         const list = stationsByCity[city] ?? [];
         if (list.length === 0) return;
         setSelectedStationId(list[0].id);
+        setLocationSource(null); // manual override — indicator no longer applies
     };
 
     const currentAqi = currentReading?.aqi ?? null;
@@ -173,6 +192,18 @@ export default function DashboardPage() {
                         Select a city or click a station marker to view the next-24h AQI
                         forecast.
                     </p>
+                    {locationSource && selectedStation ? (
+                        <div className="mt-2 inline-flex items-center gap-1.5 text-xs text-white/50 bg-white/5 border border-white/10 rounded-full px-3 py-1">
+                            {locationSource === "geo" ? (
+                                <>
+                                    <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                                    Using your location — showing {selectedStation.city}
+                                </>
+                            ) : (
+                                <>Showing {selectedStation.city}</>
+                            )}
+                        </div>
+                    ) : null}
                 </div>
 
                 {stationsError ? (
@@ -212,7 +243,10 @@ export default function DashboardPage() {
 
                         <div style={{ borderRadius: 16, overflow: "hidden" }}>
                             <StationMap
-                                onStationSelect={(stationId) => setSelectedStationId(stationId)}
+                                onStationSelect={(stationId) => {
+                                    setSelectedStationId(stationId);
+                                    setLocationSource(null); // manual override
+                                }}
                             />
                         </div>
                     </div>

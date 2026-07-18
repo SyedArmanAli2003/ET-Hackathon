@@ -129,7 +129,15 @@ export default function ForecastChart({
     );
 
     // ── Sparse data: show forecast card(s) instead of a chart ──────────────
-    if (chartData.length > 0 && chartData.length <= 3) {
+    // Only fall back to cards when there's truly nothing to draw a trend
+    // line with (0 or 1 point). With the current model cadence, most
+    // stations only accumulate 1-3 forecast rows between pipeline runs --
+    // 2+ points is still a real, useful line, so it should render as an
+    // actual chart, not collapse into cards. (Previously this threshold was
+    // <= 3, which meant the LineChart below was effectively unreachable
+    // with live data -- every station currently has <= 3 forecasts -- so
+    // the chart never rendered at all.)
+    if (chartData.length === 1) {
         return (
             <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
                 {header}
@@ -186,7 +194,7 @@ export default function ForecastChart({
         );
     }
 
-    // ── Full line chart (4+ data points) ─────────────────────────────────────
+    // ── Full line chart (2+ data points) ─────────────────────────────────────
     return (
         <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
             {header}

@@ -5,7 +5,7 @@ import { Menu, X, Wind, Brain, Bell, MapPin, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { getStations, getCurrentReading, type Station } from "../lib/data";
-import { getAqiBand } from "../lib/aqi";
+import { getAqiBand, type SeverityBand } from "../lib/aqi";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Asset image paths
@@ -17,52 +17,38 @@ const SPOTLIGHT_R = 320;
 // ─────────────────────────────────────────────────────────────────────────────
 // RevealLayer — canvas-mask spotlight
 // ─────────────────────────────────────────────────────────────────────────────
-function RevealLayer({ image, cursorX, cursorY }: { image: string; cursorX: number; cursorY: number }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const revealRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
-    resize();
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
-  }, []);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const reveal = revealRef.current;
-    if (!canvas || !reveal) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const grad = ctx.createRadialGradient(cursorX, cursorY, 0, cursorX, cursorY, SPOTLIGHT_R);
-    grad.addColorStop(0, "rgba(255,255,255,1)");
-    grad.addColorStop(0.35, "rgba(255,255,255,1)");
-    grad.addColorStop(0.6, "rgba(255,255,255,0.7)");
-    grad.addColorStop(0.8, "rgba(255,255,255,0.2)");
-    grad.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(cursorX, cursorY, SPOTLIGHT_R, 0, Math.PI * 2);
-    ctx.fill();
-    const dataUrl = canvas.toDataURL();
-    reveal.style.maskImage = `url(${dataUrl})`;
-    reveal.style.webkitMaskImage = `url(${dataUrl})`;
-    reveal.style.maskSize = "100% 100%";
-    reveal.style.webkitMaskSize = "100% 100%";
-  });
-
+// PERF FIX (both issues below were the real source of the lag):
+//   1. The old version drew a radial gradient onto a hidden <canvas> and
+//      called canvas.toDataURL() every frame to build a CSS mask --
+//      toDataURL() synchronously base64-encodes the whole canvas buffer,
+//      one of the most expensive DOM operations available, run 60x/sec.
+//   2. Cursor position was React state (setCursorPos), so every mousemove
+//      tick re-rendered the ENTIRE HeroSection tree -- including
+//      FeaturesSection, HowItWorksSection, CtaSection, Footer, and
+//      LiveAqiStrip, none of which are memoized -- 60 times per second,
+//      for a purely visual effect that never needed React reconciliation.
+// Fix: RevealLayer now takes refs, not props, and the parent writes
+// directly to the DOM inside the RAF loop via imperative style updates.
+// No React state, no re-renders, no canvas encoding -- just GPU-composited
+// CSS (mask-image position + transform), which is what this kind of
+// pointer-follow effect should cost.
+function RevealLayer({
+  image,
+  revealRef,
+}: {
+  image: string;
+  revealRef: React.RefObject<HTMLDivElement | null>;
+}) {
   return (
-    <>
-      <canvas ref={canvasRef} style={{ display: "none" }} className="absolute inset-0 pointer-events-none" />
-      <div
-        ref={revealRef}
-        className="absolute inset-0 bg-center bg-cover bg-no-repeat z-30 pointer-events-none brightness-110 saturate-110"
-        style={{ backgroundImage: `url(${image})` }}
-      />
-    </>
+    <div
+      ref={revealRef}
+      className="absolute inset-0 bg-center bg-cover bg-no-repeat z-30 pointer-events-none brightness-110 saturate-110"
+      style={{
+        backgroundImage: `url(${image})`,
+        maskImage: `radial-gradient(circle ${SPOTLIGHT_R}px at -999px -999px, rgba(255,255,255,1) 0%, rgba(255,255,255,1) 35%, rgba(255,255,255,0.7) 60%, rgba(255,255,255,0.2) 80%, rgba(255,255,255,0) 100%)`,
+        WebkitMaskImage: `radial-gradient(circle ${SPOTLIGHT_R}px at -999px -999px, rgba(255,255,255,1) 0%, rgba(255,255,255,1) 35%, rgba(255,255,255,0.7) 60%, rgba(255,255,255,0.2) 80%, rgba(255,255,255,0) 100%)`,
+      }}
+    />
   );
 }
 
@@ -97,7 +83,12 @@ const NAV_ITEMS = [
 // ─────────────────────────────────────────────────────────────────────────────
 // Live AQI cards — shown in a dedicated strip BELOW the hero
 // ─────────────────────────────────────────────────────────────────────────────
-type CityAqi = { city: string; aqi: number | null; band: ReturnType<typeof getAqiBand> };
+// `band` is genuinely nullable: getAqiBand() itself never returns null, but
+// this strip only calls it when a station actually has a current reading
+// (aqi !== null). A city with no reading at all has no band to show, and
+// the UI below already renders a "No data" fallback for that case -- the
+// type must reflect that possibility instead of lying about it.
+type CityAqi = { city: string; aqi: number | null; band: SeverityBand | null };
 
 function LiveAqiStrip() {
   const [data, setData] = useState<CityAqi[]>([]);
@@ -341,20 +332,36 @@ function Footer() {
 // Main HeroSection export
 // ─────────────────────────────────────────────────────────────────────────────
 export default function HeroSection() {
-  const [cursorPos, setCursorPos] = useState({ x: -999, y: -999 });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mouseRef = useRef({ x: -999, y: -999 });
   const smoothRef = useRef({ x: -999, y: -999 });
   const rafRef = useRef<number | null>(null);
   const pathname = usePathname();
 
+  // DOM refs the RAF loop writes to directly -- no React state, no
+  // re-renders. See the PERF FIX note on RevealLayer above for why.
+  const revealRef = useRef<HTMLDivElement>(null);
+  const glowRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const onMove = (e: MouseEvent) => { mouseRef.current = { x: e.clientX, y: e.clientY }; };
     window.addEventListener("mousemove", onMove);
+
     const loop = () => {
       smoothRef.current.x += (mouseRef.current.x - smoothRef.current.x) * 0.1;
       smoothRef.current.y += (mouseRef.current.y - smoothRef.current.y) * 0.1;
-      setCursorPos({ x: smoothRef.current.x, y: smoothRef.current.y });
+      const x = smoothRef.current.x;
+      const y = smoothRef.current.y;
+
+      if (revealRef.current) {
+        const mask = `radial-gradient(circle ${SPOTLIGHT_R}px at ${x}px ${y}px, rgba(255,255,255,1) 0%, rgba(255,255,255,1) 35%, rgba(255,255,255,0.7) 60%, rgba(255,255,255,0.2) 80%, rgba(255,255,255,0) 100%)`;
+        revealRef.current.style.maskImage = mask;
+        revealRef.current.style.webkitMaskImage = mask;
+      }
+      if (glowRef.current) {
+        glowRef.current.style.transform = `translate3d(${x - SPOTLIGHT_R}px, ${y - SPOTLIGHT_R}px, 0)`;
+      }
+
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
@@ -427,7 +434,7 @@ export default function HeroSection() {
         />
 
         {/* Cursor-revealed clear sky */}
-        <RevealLayer image={REVEAL_IMAGE} cursorX={cursorPos.x} cursorY={cursorPos.y} />
+        <RevealLayer image={REVEAL_IMAGE} revealRef={revealRef} />
 
         {/* Subtle vignette — darkens edges, not center */}
         <div
@@ -435,16 +442,25 @@ export default function HeroSection() {
           style={{ background: "radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.55) 100%)" }}
         />
 
-        {/* Orange glow that follows cursor */}
+        {/* Orange glow that follows cursor.
+            PERF FIX: was positioned with left/top (recalculated every RAF
+            tick via mousemove) and driven by React state, forcing both a
+            layout reflow AND a full component re-render every frame.
+            translate3d is GPU-composited, and this div is now updated
+            directly via ref inside the RAF loop -- no React re-render at
+            all. The gradient already has a soft falloff built in, so the
+            separate blur() filter (an expensive per-frame paint op at this
+            size) was removed as redundant. */}
         <div
-          className="absolute z-40 pointer-events-none rounded-full opacity-30"
+          ref={glowRef}
+          className="absolute z-40 pointer-events-none rounded-full opacity-30 will-change-transform"
           style={{
             width: SPOTLIGHT_R * 2,
             height: SPOTLIGHT_R * 2,
-            left: cursorPos.x - SPOTLIGHT_R,
-            top: cursorPos.y - SPOTLIGHT_R,
-            background: "radial-gradient(circle, rgba(232,112,42,0.5) 0%, transparent 70%)",
-            filter: "blur(40px)",
+            left: 0,
+            top: 0,
+            transform: `translate3d(${-SPOTLIGHT_R}px, ${-SPOTLIGHT_R}px, 0)`,
+            background: "radial-gradient(circle, rgba(232,112,42,0.55) 0%, rgba(232,112,42,0.15) 45%, transparent 75%)",
             mixBlendMode: "screen",
           }}
         />

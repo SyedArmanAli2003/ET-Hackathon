@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import AqiChatbot from "../components/AqiChatbot";
 
 export const metadata: Metadata = {
   title: "SaanSLive — AI Air Quality Forecasting",
@@ -14,7 +15,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        {children}
+        <AqiChatbot />
+      </body>
     </html>
   );
 }
