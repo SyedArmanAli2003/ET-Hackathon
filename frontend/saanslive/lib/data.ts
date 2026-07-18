@@ -79,6 +79,52 @@ export async function getStations(): Promise<Station[]> {
 }
 
 /**
+ * Return the set of station IDs that have at least one forecast row.
+ *
+ * Used by the dashboard to pick a sensible default station on load --
+ * without this, the default is just "alphabetically first city, first
+ * station within it", which can easily land on a station with zero
+ * readings/forecasts (e.g. a sensor that was never active) while other
+ * stations in the same city have real data. This never throws; on a
+ * genuine query failure it returns an empty set, and the caller falls
+ * back to its existing default-selection behavior.
+ */
+export async function getStationIdsWithForecasts(): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from("forecasts")
+    .select("station_id")
+    .eq("horizon_hours", 6); // Only count horizon=6 since that's what the chart shows
+
+  if (error) {
+    console.error("[getStationIdsWithForecasts] Supabase error:", error.message);
+    return new Set();
+  }
+
+  return new Set((data ?? []).map((row) => row.station_id as string));
+}
+
+/**
+ * Return the set of station IDs that have at least one reading row.
+ *
+ * Used together with getStationIdsWithForecasts to pick a default station
+ * on load that has BOTH readings and forecasts, giving a fully-populated
+ * dashboard on first view rather than landing on an offline sensor.
+ * Never throws; returns an empty set on failure.
+ */
+export async function getStationIdsWithReadings(): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from("readings")
+    .select("station_id");
+
+  if (error) {
+    console.error("[getStationIdsWithReadings] Supabase error:", error.message);
+    return new Set();
+  }
+
+  return new Set((data ?? []).map((row) => row.station_id as string));
+}
+
+/**
  * Return the most recent forecast rows for a station, horizon_hours=6.
  * Returns up to 24 rows, sorted ascending by forecast_at (earliest first).
  *

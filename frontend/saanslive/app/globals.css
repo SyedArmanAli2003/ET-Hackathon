@@ -58,3 +58,7 @@
     opacity: 1;
   }
 }
+
+/* Custom utilities not in Tailwind defaults */
+.z-35 { z-index: 35; }
+

@@ -27,7 +27,7 @@ function clampFinite(max: number) {
     return Number.isFinite(max) ? max : 400;
 }
 
-function formatTimeLabel(iso: string) {
+function formatTimeLabel(iso: string): string {
     const d = new Date(iso);
     const hours = d.getHours();
     const minutes = d.getMinutes();
@@ -35,6 +35,17 @@ function formatTimeLabel(iso: string) {
     const h12 = hours % 12 === 0 ? 12 : hours % 12;
     const mm = minutes.toString().padStart(2, "0");
     return minutes === 0 ? `${h12}${ampm}` : `${h12}:${mm}${ampm}`;
+}
+
+function formatDateLabel(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-IN", { month: "short", day: "numeric" });
+}
+
+function isToday(iso: string): boolean {
+    const d = new Date(iso);
+    const now = new Date();
+    return d.toDateString() === now.toDateString();
 }
 
 export default function ForecastChart({
@@ -104,32 +115,81 @@ export default function ForecastChart({
         );
     }
 
-    return (
-        <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-2">
-                <h2 className="text-white font-semibold">Next 24h AQI Forecast</h2>
-                {currentAqi !== null ? (
-                    <div className="text-white/70 text-xs">
-                        Current AQI: <span className="text-white">{currentAqi}</span>
-                    </div>
-                ) : (
-                    <div className="text-white/70 text-xs">Current AQI unavailable</div>
-                )}
-            </div>
+    const header = (
+        <div className="flex items-center justify-between mb-3">
+            <h2 className="text-white font-semibold">AI Forecast</h2>
+            {currentAqi !== null ? (
+                <div className="text-white/70 text-xs">
+                    Current AQI: <span className="text-white font-medium">{Math.round(currentAqi)}</span>
+                </div>
+            ) : (
+                <div className="text-white/40 text-xs">Current AQI unavailable</div>
+            )}
+        </div>
+    );
 
-            {chartData.length === 0 ? (
+    // ── Sparse data: show forecast card(s) instead of a chart ──────────────
+    if (chartData.length > 0 && chartData.length <= 3) {
+        return (
+            <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
+                {header}
+                <div className="flex flex-col gap-3">
+                    {chartData.map((d, i) => {
+                        const stale = !isToday(d.forecast_at);
+                        return (
+                            <div key={i} className="flex items-center justify-between bg-white/5 rounded-xl px-4 py-3">
+                                <div>
+                                    <div className="text-white/50 text-[10px] uppercase tracking-widest mb-0.5">
+                                        Predicted for
+                                    </div>
+                                    <div className="text-white text-sm font-medium">
+                                        {isToday(d.forecast_at)
+                                            ? `Today at ${formatTimeLabel(d.forecast_at)}`
+                                            : `${formatDateLabel(d.forecast_at)} at ${formatTimeLabel(d.forecast_at)}`}
+                                    </div>
+                                    {stale && (
+                                        <div className="text-yellow-400/70 text-[10px] mt-0.5">⚠ Based on older sensor data</div>
+                                    )}
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-3xl font-bold text-white tracking-tighter">
+                                        {Math.round(d.predicted_aqi)}
+                                    </div>
+                                    <div className="text-white/40 text-[10px]">AQI</div>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+                <div className="mt-3 text-white/30 text-[10px] text-center">
+                    Predicted by XGBoost · updated every pipeline run (~5h)
+                </div>
+            </div>
+        );
+    }
+
+    // ── Empty state ──────────────────────────────────────────────────────────
+    if (chartData.length === 0) {
+        return (
+            <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
+                {header}
                 <div
-                    style={{ height: 320 }}
+                    style={{ height: 280 }}
                     className="flex flex-col items-center justify-center gap-1 text-center px-6"
                 >
-                    <div className="text-white/70 text-sm font-medium">
-                        No forecast available yet
-                    </div>
+                    <div className="text-white/70 text-sm font-medium">No forecast available yet</div>
                     <div className="text-white/50 text-xs">
                         The model hasn&apos;t generated a prediction for this station yet.
                     </div>
                 </div>
-            ) : (
+            </div>
+        );
+    }
+
+    // ── Full line chart (4+ data points) ─────────────────────────────────────
+    return (
+        <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
+            {header}
             <div style={{ width: "100%", height: 320 }}>
                 <ResponsiveContainer>
                     <LineChart
@@ -156,7 +216,7 @@ export default function ForecastChart({
                                 stroke="rgba(255,255,255,0.7)"
                                 strokeDasharray="6 6"
                                 label={{
-                                    value: "Persistence",
+                                    value: "Current",
                                     position: "insideTop",
                                     fill: "rgba(255,255,255,0.8)",
                                     fontSize: 12,
@@ -186,7 +246,7 @@ export default function ForecastChart({
                                 borderRadius: 12,
                             }}
                             labelStyle={{ color: "white" }}
-                            formatter={(value: any) => [`${value}`, "AQI"]}
+                            formatter={(value: unknown) => [`${value}`, "AQI"]}
                         />
 
                         <Line
@@ -194,7 +254,7 @@ export default function ForecastChart({
                             dataKey="predicted_aqi"
                             stroke="#e8702a"
                             strokeWidth={2.5}
-                            dot={false}
+                            dot={{ r: 3, fill: "#e8702a" }}
                             name="Predicted AQI"
                         />
 
@@ -202,17 +262,19 @@ export default function ForecastChart({
                             <Line
                                 type="monotone"
                                 dataKey="baseline_aqi"
-                                stroke="rgba(255,255,255,0.75)"
-                                strokeWidth={2}
+                                stroke="rgba(255,255,255,0.5)"
+                                strokeWidth={1.5}
                                 dot={false}
                                 strokeDasharray="6 6"
-                                name="Persistence baseline"
+                                name="Current AQI"
                             />
                         ) : null}
                     </LineChart>
                 </ResponsiveContainer>
             </div>
-            )}
+            <div className="mt-2 text-white/25 text-[10px] text-center">
+                Predicted by XGBoost · updated every ~5h
+            </div>
         </div>
     );
 }

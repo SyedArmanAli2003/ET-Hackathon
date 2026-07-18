@@ -1,76 +1,52 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { Menu, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Menu, X, Wind, Brain, Bell, MapPin, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { getStations, getCurrentReading, type Station } from "../lib/data";
+import { getAqiBand } from "../lib/aqi";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Asset image paths — drop your own paths/URLs here
+// Asset image paths
 // ─────────────────────────────────────────────────────────────────────────────
-const BASE_IMAGE = "/smoggy_skyline.png";   // hazy / smoggy version
-const REVEAL_IMAGE = "/clear_skyline.png";    // clear blue-sky version
-
-// Spotlight radius in pixels
-const SPOTLIGHT_R = 260;
+const BASE_IMAGE = "/smoggy_skyline.png";
+const REVEAL_IMAGE = "/clear_skyline.png";
+const SPOTLIGHT_R = 320;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RevealLayer — draws a canvas mask and applies it to the clear-sky image
+// RevealLayer — canvas-mask spotlight
 // ─────────────────────────────────────────────────────────────────────────────
-function RevealLayer({
-  image,
-  cursorX,
-  cursorY,
-}: {
-  image: string;
-  cursorX: number;
-  cursorY: number;
-}) {
+function RevealLayer({ image, cursorX, cursorY }: { image: string; cursorX: number; cursorY: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const revealRef = useRef<HTMLDivElement>(null);
 
-  // Size canvas to window on mount + resize
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
+    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
 
-  // Redraw mask on every render
   useEffect(() => {
     const canvas = canvasRef.current;
     const reveal = revealRef.current;
     if (!canvas || !reveal) return;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Build a radial gradient that fades from opaque centre → transparent edge
-    const grad = ctx.createRadialGradient(
-      cursorX, cursorY, 0,
-      cursorX, cursorY, SPOTLIGHT_R,
-    );
+    const grad = ctx.createRadialGradient(cursorX, cursorY, 0, cursorX, cursorY, SPOTLIGHT_R);
     grad.addColorStop(0, "rgba(255,255,255,1)");
-    grad.addColorStop(0.4, "rgba(255,255,255,1)");
-    grad.addColorStop(0.6, "rgba(255,255,255,0.75)");
-    grad.addColorStop(0.75, "rgba(255,255,255,0.4)");
-    grad.addColorStop(0.88, "rgba(255,255,255,0.12)");
+    grad.addColorStop(0.35, "rgba(255,255,255,1)");
+    grad.addColorStop(0.6, "rgba(255,255,255,0.7)");
+    grad.addColorStop(0.8, "rgba(255,255,255,0.2)");
     grad.addColorStop(1, "rgba(255,255,255,0)");
-
     ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.arc(cursorX, cursorY, SPOTLIGHT_R, 0, Math.PI * 2);
     ctx.fill();
-
-    // Apply canvas as CSS mask on the reveal div
     const dataUrl = canvas.toDataURL();
     reveal.style.maskImage = `url(${dataUrl})`;
     reveal.style.webkitMaskImage = `url(${dataUrl})`;
@@ -80,17 +56,10 @@ function RevealLayer({
 
   return (
     <>
-      {/* Hidden canvas used only to generate the mask data URL */}
-      <canvas
-        ref={canvasRef}
-        style={{ display: "none" }}
-        className="absolute inset-0 pointer-events-none"
-      />
-
-      {/* Clear-sky image, masked by the canvas spotlight */}
+      <canvas ref={canvasRef} style={{ display: "none" }} className="absolute inset-0 pointer-events-none" />
       <div
         ref={revealRef}
-        className="absolute inset-0 bg-center bg-cover bg-no-repeat z-30 pointer-events-none"
+        className="absolute inset-0 bg-center bg-cover bg-no-repeat z-30 pointer-events-none brightness-110 saturate-110"
         style={{ backgroundImage: `url(${image})` }}
       />
     </>
@@ -98,35 +67,16 @@ function RevealLayer({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Nav logo SVG
+// Logo
 // ─────────────────────────────────────────────────────────────────────────────
 function LogoMark() {
   return (
-    <svg
-      width={26}
-      height={26}
-      viewBox="0 0 256 256"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      {/* Abstract air-quality / sun-through-haze mark */}
+    <svg width={26} height={26} viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
       <circle cx="128" cy="128" r="52" fill="#ffffff" fillOpacity="0.9" />
       <circle cx="128" cy="128" r="36" fill="#e8702a" />
-      {/* Rays */}
       {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => (
-        <rect
-          key={deg}
-          x="124"
-          y="14"
-          width="8"
-          height="28"
-          rx="4"
-          fill="#ffffff"
-          fillOpacity="0.8"
-          transform={`rotate(${deg} 128 128)`}
-        />
+        <rect key={deg} x="124" y="14" width="8" height="28" rx="4" fill="#ffffff" fillOpacity="0.8" transform={`rotate(${deg} 128 128)`} />
       ))}
-      {/* Haze streaks */}
       <rect x="32" y="170" width="80" height="6" rx="3" fill="#ffffff" fillOpacity="0.4" />
       <rect x="48" y="184" width="60" height="5" rx="2.5" fill="#ffffff" fillOpacity="0.25" />
       <rect x="144" y="170" width="80" height="6" rx="3" fill="#ffffff" fillOpacity="0.4" />
@@ -136,16 +86,259 @@ function LogoMark() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Nav items — pathname-aware links
+// Nav
 // ─────────────────────────────────────────────────────────────────────────────
 const NAV_ITEMS = [
-  { label: "Forecast", href: "/dashboard" },
-  { label: "Map", href: "/dashboard" },
-  { label: "Health Advisory", href: "/dashboard#advisory" },
+  { label: "Home", href: "/" },
+  { label: "Dashboard", href: "/dashboard" },
   { label: "About", href: "/about" },
 ] as const;
 
-/* Main HeroSection component */
+// ─────────────────────────────────────────────────────────────────────────────
+// Live AQI cards — shown in a dedicated strip BELOW the hero
+// ─────────────────────────────────────────────────────────────────────────────
+type CityAqi = { city: string; aqi: number | null; band: ReturnType<typeof getAqiBand> };
+
+function LiveAqiStrip() {
+  const [data, setData] = useState<CityAqi[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetch() {
+      try {
+        const s = await getStations();
+        const topCities = ["Delhi", "Mumbai", "Bengaluru", "Chennai", "Kolkata"];
+        const targets: Station[] = [];
+        for (const city of topCities) {
+          const st = s.find((st) => st.city === city);
+          if (st) targets.push(st);
+        }
+        const results = await Promise.all(
+          targets.map(async (st) => {
+            const r = await getCurrentReading(st.id);
+            const aqi = r?.aqi ?? null;
+            return { city: st.city, aqi, band: aqi !== null ? getAqiBand(aqi) : null };
+          })
+        );
+        if (!cancelled) setData(results);
+      } catch { /* silently ignore */ }
+    }
+    fetch();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (data.length === 0) return null;
+
+  return (
+    <div className="w-full bg-[#0a0a0a] border-b border-white/10">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+          <span className="text-white/60 text-xs font-semibold uppercase tracking-widest">Live air quality right now</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {data.map((item, i) => (
+            <Link href="/dashboard" key={item.city}>
+              <div
+                className="group bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 rounded-2xl p-4 transition-all duration-300 cursor-pointer"
+                style={{ animationDelay: `${i * 0.1}s` }}
+              >
+                <div className="text-white/50 text-[10px] font-bold uppercase tracking-widest mb-2">{item.city}</div>
+                <div className="flex items-baseline gap-1">
+                  <span className="text-3xl font-bold text-white tracking-tighter leading-none">
+                    {item.aqi !== null ? Math.round(item.aqi) : "—"}
+                  </span>
+                  {item.aqi !== null && <span className="text-[10px] font-semibold text-white/40">AQI</span>}
+                </div>
+                {item.band ? (
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: item.band.color, boxShadow: `0 0 6px ${item.band.color}` }} />
+                    <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: item.band.color }}>
+                      {item.band.label}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-white/30 text-[10px]">No data</div>
+                )}
+              </div>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Features section
+// ─────────────────────────────────────────────────────────────────────────────
+const FEATURES = [
+  {
+    icon: Brain,
+    title: "AI-Powered Forecasts",
+    desc: "XGBoost models trained on real sensor data predict AQI up to 6 hours ahead. Re-trained automatically on every ingestion run.",
+    color: "#e8702a",
+  },
+  {
+    icon: MapPin,
+    title: "Hyperlocal Coverage",
+    desc: "29 active monitoring stations across 17 Indian cities. View color-coded AQI markers on an interactive map and click any to drill in.",
+    color: "#3b82f6",
+  },
+  {
+    icon: Wind,
+    title: "Real-Time Ingestion",
+    desc: "Data flows automatically from OpenAQ every 5 hours via a fault-isolated GitHub Actions pipeline — no manual intervention needed.",
+    color: "#10b981",
+  },
+  {
+    icon: Bell,
+    title: "Personalized Advisories",
+    desc: "Tell us if your household includes children, elderly, or people with asthma. Health guidance adapts to your actual vulnerabilities.",
+    color: "#8b5cf6",
+  },
+];
+
+function FeaturesSection() {
+  return (
+    <section className="w-full bg-[#050505] py-20 px-4 sm:px-6">
+      <div className="max-w-7xl mx-auto">
+        <div className="text-center mb-14">
+          <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-1.5 mb-4">
+            <span className="text-white/60 text-xs font-semibold uppercase tracking-widest">What we do</span>
+          </div>
+          <h2 className="text-white text-3xl sm:text-4xl font-bold tracking-tight">
+            Know the air before you step outside
+          </h2>
+          <p className="mt-4 text-white/50 text-sm sm:text-base max-w-xl mx-auto leading-relaxed">
+            SaanSLive combines real sensor data, machine learning, and personalized health context into one clear, actionable dashboard.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {FEATURES.map((f) => (
+            <div
+              key={f.title}
+              className="group bg-white/[0.03] hover:bg-white/[0.06] border border-white/10 hover:border-white/20 rounded-2xl p-6 transition-all duration-300"
+            >
+              <div
+                className="w-10 h-10 rounded-xl flex items-center justify-center mb-4"
+                style={{ backgroundColor: `${f.color}22`, border: `1px solid ${f.color}44` }}
+              >
+                <f.icon size={18} style={{ color: f.color }} />
+              </div>
+              <h3 className="text-white font-semibold text-base mb-2">{f.title}</h3>
+              <p className="text-white/50 text-sm leading-relaxed">{f.desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// How it works section
+// ─────────────────────────────────────────────────────────────────────────────
+const STEPS = [
+  { num: "01", title: "Sensors collect PM2.5", desc: "Ground-level CPCB-grade sensors across India report hourly PM2.5 readings to OpenAQ." },
+  { num: "02", title: "Pipeline ingests & enriches", desc: "Our GitHub Actions pipeline fetches readings, pairs them with weather data from Open-Meteo, and stores everything in Supabase." },
+  { num: "03", title: "AI model predicts", desc: "An XGBoost model uses the enriched feature vector to predict AQI 6 hours ahead and writes it to the forecasts table." },
+  { num: "04", title: "You see the future", desc: "The dashboard serves live data directly from Supabase — no caching lag, always the freshest reading and forecast available." },
+];
+
+function HowItWorksSection() {
+  return (
+    <section className="w-full bg-[#0a0a0a] border-t border-white/5 py-20 px-4 sm:px-6">
+      <div className="max-w-7xl mx-auto">
+        <div className="text-center mb-14">
+          <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-1.5 mb-4">
+            <span className="text-white/60 text-xs font-semibold uppercase tracking-widest">The pipeline</span>
+          </div>
+          <h2 className="text-white text-3xl sm:text-4xl font-bold tracking-tight">How SaanSLive works</h2>
+          <p className="mt-4 text-white/50 text-sm sm:text-base max-w-xl mx-auto leading-relaxed">
+            From raw sensor readings to a personalized forecast — automated, fault-tolerant, and end-to-end.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {STEPS.map((step, i) => (
+            <div key={step.num} className="relative">
+              {i < STEPS.length - 1 && (
+                <div className="hidden lg:block absolute top-6 left-[calc(100%+1px)] w-full h-px bg-gradient-to-r from-white/20 to-transparent z-10 pointer-events-none" />
+              )}
+              <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-6 h-full">
+                <div className="text-[#e8702a] text-xs font-bold uppercase tracking-widest mb-3">{step.num}</div>
+                <h3 className="text-white font-semibold text-base mb-2">{step.title}</h3>
+                <p className="text-white/50 text-sm leading-relaxed">{step.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Final CTA section
+// ─────────────────────────────────────────────────────────────────────────────
+function CtaSection() {
+  return (
+    <section className="w-full bg-[#050505] border-t border-white/5 py-20 px-4 sm:px-6">
+      <div className="max-w-3xl mx-auto text-center">
+        <h2 className="text-white text-3xl sm:text-5xl font-bold tracking-tight leading-tight">
+          Breathe smarter.<br />
+          <span className="text-[#e8702a]">Start now.</span>
+        </h2>
+        <p className="mt-6 text-white/50 text-sm sm:text-base max-w-lg mx-auto leading-relaxed">
+          Check the live air quality index and 6-hour forecast for 17 Indian cities. Free, real-time, and built for everyone.
+        </p>
+        <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+          <Link
+            href="/dashboard"
+            className="flex items-center gap-2 bg-[#e8702a] hover:bg-[#d2611f] text-white font-semibold px-8 py-3.5 rounded-full transition-all hover:scale-[1.03] hover:shadow-xl hover:shadow-[#e8702a]/30 active:scale-95"
+          >
+            View Live Dashboard
+            <ArrowRight size={16} />
+          </Link>
+          <Link
+            href="/about"
+            className="text-white/60 hover:text-white text-sm font-medium transition-colors px-6 py-3.5"
+          >
+            Learn more about the project →
+          </Link>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Footer
+// ─────────────────────────────────────────────────────────────────────────────
+function Footer() {
+  return (
+    <footer className="w-full bg-black border-t border-white/5 py-8 px-4 sm:px-6">
+      <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <LogoMark />
+          <span className="text-white/80 text-sm font-semibold">SaanSLive</span>
+        </div>
+        <p className="text-white/30 text-xs">
+          Data from OpenAQ · Forecasts by XGBoost · Built for ET Hackathon 2026
+        </p>
+        <div className="flex items-center gap-4">
+          <Link href="/dashboard" className="text-white/40 hover:text-white/80 text-xs transition-colors">Dashboard</Link>
+          <Link href="/about" className="text-white/40 hover:text-white/80 text-xs transition-colors">About</Link>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main HeroSection export
 // ─────────────────────────────────────────────────────────────────────────────
 export default function HeroSection() {
   const [cursorPos, setCursorPos] = useState({ x: -999, y: -999 });
@@ -155,13 +348,9 @@ export default function HeroSection() {
   const rafRef = useRef<number | null>(null);
   const pathname = usePathname();
 
-  // Smoothed cursor tracking with RAF
   useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      mouseRef.current = { x: e.clientX, y: e.clientY };
-    };
+    const onMove = (e: MouseEvent) => { mouseRef.current = { x: e.clientX, y: e.clientY }; };
     window.addEventListener("mousemove", onMove);
-
     const loop = () => {
       smoothRef.current.x += (mouseRef.current.x - smoothRef.current.x) * 0.1;
       smoothRef.current.y += (mouseRef.current.y - smoothRef.current.y) * 0.1;
@@ -169,7 +358,6 @@ export default function HeroSection() {
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
-
     return () => {
       window.removeEventListener("mousemove", onMove);
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -177,32 +365,23 @@ export default function HeroSection() {
   }, []);
 
   return (
-    <div
-      className="min-h-screen bg-white tracking-[-0.02em]"
-      style={{ fontFamily: "'Inter', sans-serif" }}
-    >
-      {/* ── Navigation ──────────────────────────────────────────────────────── */}
+    <div className="min-h-screen bg-[#050505] tracking-[-0.02em]" style={{ fontFamily: "'Inter', sans-serif" }}>
+
+      {/* ── Navigation ── */}
       <nav className="fixed top-0 left-0 right-0 z-[100] flex items-center justify-between p-4 sm:p-5">
-        {/* Left: logo + wordmark */}
         <div className="flex items-center gap-2.5">
           <LogoMark />
-          <span className="text-white text-2xl font-playfair italic">
-            SaanSLive
-          </span>
+          <span className="text-white text-xl font-semibold">SaanSLive</span>
         </div>
 
-        {/* Center pill — desktop only */}
-        <div className="hidden md:flex absolute left-1/2 -translate-x-1/2 bg-white/20 backdrop-blur-md border border-white/30 rounded-full px-2 py-2 items-center gap-1">
+        <div className="hidden md:flex absolute left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-xl border border-white/20 rounded-full px-2 py-1.5 items-center gap-1">
           {NAV_ITEMS.map((item) => {
-            const active = pathname === item.href.split("#")[0];
+            const active = pathname === item.href;
             return (
               <Link
                 key={item.label}
                 href={item.href}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${active
-                  ? "bg-white/30 text-white"
-                  : "text-white/80 hover:bg-white/20 hover:text-white"
-                  }`}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200 ${active ? "bg-white/20 text-white shadow-sm" : "text-white/70 hover:bg-white/10 hover:text-white"}`}
               >
                 {item.label}
               </Link>
@@ -210,117 +389,118 @@ export default function HeroSection() {
           })}
         </div>
 
-        {/* Right: desktop CTA + mobile menu toggle */}
         <div className="flex items-center gap-3">
-          <Link href="/dashboard" className="hidden md:block bg-white text-gray-900 text-sm font-semibold px-6 py-2.5 rounded-full hover:bg-gray-100 transition-colors">
+          <Link href="/dashboard" className="hidden md:block bg-white text-gray-900 text-sm font-semibold px-5 py-2 rounded-full hover:bg-gray-100 transition-colors">
             Get Started
           </Link>
-          <button
-            className="md:hidden text-white p-1"
-            onClick={() => setMobileMenuOpen((v) => !v)}
-            aria-label="Toggle menu"
-          >
-            {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
+          <button className="md:hidden text-white p-1" onClick={() => setMobileMenuOpen((v) => !v)} aria-label="Toggle menu">
+            {mobileMenuOpen ? <X size={22} /> : <Menu size={22} />}
           </button>
         </div>
       </nav>
 
       {/* Mobile menu */}
       {mobileMenuOpen && (
-        <div className="fixed inset-x-0 top-16 z-[99] bg-black/80 backdrop-blur-md border-t border-white/10 px-5 py-4 flex flex-col gap-2 md:hidden">
-          {NAV_ITEMS.map((item) => {
-            const active = pathname === item.href.split("#")[0];
-            return (
-              <Link
-                key={item.label}
-                href={item.href}
-                className={`text-sm font-medium py-2.5 text-left border-b border-white/10 last:border-0 transition-colors ${active ? "text-white" : "text-white/90 hover:text-white"
-                  }`}
-                onClick={() => setMobileMenuOpen(false)}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
-          <Link href="/dashboard" className="mt-2 text-center bg-[#e8702a] text-white text-sm font-semibold px-6 py-3 rounded-full w-full block">
+        <div className="fixed inset-x-0 top-16 z-[99] bg-black/90 backdrop-blur-xl border-t border-white/10 px-5 py-4 flex flex-col gap-1 md:hidden">
+          {NAV_ITEMS.map((item) => (
+            <Link
+              key={item.label}
+              href={item.href}
+              className="text-sm font-medium py-2.5 text-white/80 hover:text-white border-b border-white/10 last:border-0 transition-colors"
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              {item.label}
+            </Link>
+          ))}
+          <Link href="/dashboard" className="mt-3 text-center bg-[#e8702a] text-white text-sm font-semibold px-6 py-3 rounded-full block">
             Get Started
           </Link>
         </div>
       )}
 
-      {/* ── Hero Section ────────────────────────────────────────────────────── */}
-      <section
-        className="relative w-full overflow-hidden h-screen bg-black"
-        style={{ height: "100dvh" }}
-      >
-        {/* Layer 1 (z-10): base smoggy image */}
+      {/* ── Hero ── */}
+      <section className="relative w-full overflow-hidden bg-black" style={{ height: "100dvh" }}>
+        {/* Base smoggy image — natural-looking darkness, not crushed */}
         <div
-          className="absolute inset-0 z-10 bg-center bg-cover bg-no-repeat hero-zoom"
+          className="absolute inset-0 z-10 bg-center bg-cover bg-no-repeat hero-zoom brightness-75 saturate-75"
           style={{ backgroundImage: `url(${BASE_IMAGE})` }}
         />
 
-        {/* Layer 2 (z-30): cursor-revealed clear-sky image */}
-        <RevealLayer
-          image={REVEAL_IMAGE}
-          cursorX={cursorPos.x}
-          cursorY={cursorPos.y}
+        {/* Cursor-revealed clear sky */}
+        <RevealLayer image={REVEAL_IMAGE} cursorX={cursorPos.x} cursorY={cursorPos.y} />
+
+        {/* Subtle vignette — darkens edges, not center */}
+        <div
+          className="absolute inset-0 z-35 pointer-events-none"
+          style={{ background: "radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.55) 100%)" }}
         />
 
-        {/* Subtle dark overlay for text legibility */}
-        <div className="absolute inset-0 z-40 bg-black/30 pointer-events-none" />
+        {/* Orange glow that follows cursor */}
+        <div
+          className="absolute z-40 pointer-events-none rounded-full opacity-30"
+          style={{
+            width: SPOTLIGHT_R * 2,
+            height: SPOTLIGHT_R * 2,
+            left: cursorPos.x - SPOTLIGHT_R,
+            top: cursorPos.y - SPOTLIGHT_R,
+            background: "radial-gradient(circle, rgba(232,112,42,0.5) 0%, transparent 70%)",
+            filter: "blur(40px)",
+            mixBlendMode: "screen",
+          }}
+        />
 
-        {/* Layer 3 (z-50): main heading */}
-        <div className="absolute top-[14%] left-0 right-0 z-50 flex flex-col items-center text-center px-5 pointer-events-none">
+        {/* Hero text — centred */}
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center text-center px-5 pointer-events-none">
+          {/* Badge */}
+          <div className="hero-anim hero-fade inline-flex items-center gap-2 bg-white/10 backdrop-blur-md border border-white/20 rounded-full px-4 py-1.5 mb-6" style={{ animationDelay: "0.1s" }}>
+            <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-white/80 text-xs font-semibold uppercase tracking-widest">Live air quality forecasting</span>
+          </div>
+
           <h1 className="text-white leading-[0.95]">
-            <span
-              className="block font-playfair italic font-normal text-5xl sm:text-7xl md:text-8xl hero-anim hero-reveal"
-              style={{ letterSpacing: "-0.05em", animationDelay: "0.25s" }}
-            >
+            <span className="block font-playfair italic font-normal text-5xl sm:text-7xl md:text-8xl hero-anim hero-reveal" style={{ letterSpacing: "-0.04em", animationDelay: "0.25s" }}>
               See through
             </span>
-            <span
-              className="block font-normal text-5xl sm:text-7xl md:text-8xl -mt-1 hero-anim hero-reveal"
-              style={{ letterSpacing: "-0.08em", animationDelay: "0.42s" }}
-            >
+            <span className="block font-bold text-5xl sm:text-7xl md:text-8xl -mt-1 hero-anim hero-reveal" style={{ letterSpacing: "-0.06em", animationDelay: "0.42s" }}>
               the smog.
             </span>
           </h1>
 
-          {/* Sub-hint */}
-          <p
-            className="mt-6 text-white/60 text-sm font-light hero-anim hero-fade"
-            style={{ animationDelay: "0.65s" }}
-          >
+          <p className="mt-6 text-white/60 text-sm sm:text-base max-w-sm leading-relaxed hero-anim hero-fade" style={{ animationDelay: "0.6s" }}>
+            AI-powered AQI forecasts for 17 Indian cities — personalized to your household.
+          </p>
+
+          <p className="mt-2 text-white/35 text-xs hero-anim hero-fade" style={{ animationDelay: "0.7s" }}>
             Move your cursor to reveal what the air could look like.
           </p>
+
+          <div className="mt-8 flex flex-col sm:flex-row items-center gap-3 pointer-events-auto hero-anim hero-fade" style={{ animationDelay: "0.85s" }}>
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2 bg-[#e8702a] hover:bg-[#d2611f] text-white text-sm font-semibold px-7 py-3 rounded-full transition-all hover:scale-[1.03] hover:shadow-xl hover:shadow-[#e8702a]/30 active:scale-95"
+            >
+              View Live Dashboard
+              <ArrowRight size={15} />
+            </Link>
+            <Link href="/about" className="text-white/60 hover:text-white text-sm font-medium transition-colors px-4 py-3">
+              How it works →
+            </Link>
+          </div>
         </div>
 
-        {/* Layer 4 (z-50): bottom-left paragraph */}
-        <div
-          className="hidden sm:block absolute bottom-14 left-10 md:left-14 z-50 max-w-[260px] hero-anim hero-fade"
-          style={{ animationDelay: "0.7s" }}
-        >
-          <p className="text-sm text-white/80 leading-relaxed">
-            Every hour of monitoring data becomes a 24–72 hour forecast, so you can
-            plan your day before the air quality changes.
-          </p>
-        </div>
-
-        {/* Layer 5 (z-50): bottom-right block */}
-        <div
-          className="absolute bottom-10 sm:bottom-24 left-5 right-5 sm:left-auto sm:right-10 md:right-14 z-50 max-w-full sm:max-w-[260px] flex flex-col items-start gap-4 sm:gap-5 hero-anim hero-fade"
-          style={{ animationDelay: "0.85s" }}
-        >
-          <p className="text-xs sm:text-sm text-white/80 leading-relaxed">
-            Hyperlocal predictions and personalized health advisories for
-            families, elderly residents, and anyone who needs to know what&apos;s
-            coming.
-          </p>
-          <Link href="/dashboard" className="bg-[#e8702a] hover:bg-[#d2611f] text-white text-sm font-medium px-7 py-3 rounded-full transition-all hover:scale-[1.03] active:scale-95 hover:shadow-lg hover:shadow-[#e8702a]/30">
-            View Forecast
-          </Link>
+        {/* Scroll hint */}
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-1 hero-anim hero-fade" style={{ animationDelay: "1.2s" }}>
+          <div className="text-white/30 text-[10px] uppercase tracking-widest">Scroll</div>
+          <div className="w-px h-6 bg-gradient-to-b from-white/30 to-transparent animate-pulse" />
         </div>
       </section>
+
+      {/* ── Below-the-fold sections ── */}
+      <LiveAqiStrip />
+      <FeaturesSection />
+      <HowItWorksSection />
+      <CtaSection />
+      <Footer />
     </div>
   );
 }

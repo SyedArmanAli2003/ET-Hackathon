@@ -7,6 +7,8 @@ import type { Forecast, Reading, Station } from "../../lib/data";
 import {
     getCurrentReading,
     getLatestForecasts,
+    getStationIdsWithForecasts,
+    getStationIdsWithReadings,
     getStations,
 } from "../../lib/data";
 
@@ -44,11 +46,21 @@ export default function DashboardPage() {
             setLoading(true);
             setStationsError(null);
             try {
-                const s = await getStations();
+                const [s, stationIdsWithForecasts, stationIdsWithReadings] = await Promise.all([
+                    getStations(),
+                    getStationIdsWithForecasts(),
+                    getStationIdsWithReadings(),
+                ]);
                 if (cancelled) return;
                 setStations(s);
                 if (s.length > 0 && !selectedStationId) {
-                    setSelectedStationId(s[0].id);
+                    // Best default: a station with BOTH a current reading and a forecast.
+                    // Fallback chain: both → has forecast only → first station.
+                    const withBoth = s.find(
+                        (st) => stationIdsWithForecasts.has(st.id) && stationIdsWithReadings.has(st.id)
+                    );
+                    const withForecast = s.find((st) => stationIdsWithForecasts.has(st.id));
+                    setSelectedStationId((withBoth ?? withForecast ?? s[0]).id);
                 }
             } catch (err) {
                 if (cancelled) return;
