@@ -619,3 +619,47 @@ User asked to make `deepseek-ai/deepseek-v4-flash` default "if it's working bett
 
 ### Explicitly not built (scope check, not silent scope creep)
 Three.js was in the original multi-part request but the user clarified in this follow-up that the actual complaint was narrower: the existing canvas-based cursor-reveal effect felt laggy, not "please add a 3D scene." Addressed that literally — fixed the real performance bugs in the existing effect (canvas encoding + React re-render churn + layout-triggering positioning) rather than introducing Three.js, since the user's instruction was "fix that part only if you can improve it," not "replace it with a new library." No 3D library was added.
+
+## 8. Built: "Hotspot Prioritization" dashboard section
+
+Added a new dashboard tab that ranks every station across every city by how urgently it warrants attention, using only real numbers already in `readings` — no invented "registered emitter" data.
+
+**Ranking logic (transparent, computed from real numbers):**
+- Component 1: current AQI severity (higher = more urgent).
+- Component 2: 7-day trend — this week's average AQI vs last week's average AQI for the same station (worsening = more urgent).
+- `priorityScore = aqiComponent * 0.6 + trendComponent * 0.4`, on a 0-100 scale — both components shown separately in the UI so the score is auditable, not a mystery number.
+
+**Database:**
+- Added migration `20260721042124_add_hotspot_ranking_function.sql` — a Postgres function `public.get_hotspot_ranking_stats()` that computes current AQI, this-week avg, and last-week avg per station directly from `readings`. `SECURITY INVOKER`, `search_path` locked, `GRANT EXECUTE` to `anon`/`authenticated`.
+- Ran `get_advisors` (security) against the live project after applying — zero lint issues.
+- Synced the migration back to `supabase/migrations/` via `supabase migration fetch --yes`.
+
+**`lib/data.ts`:** added `HotspotRankingEntry` type and `getHotspotRanking()` — calls the RPC, joins to `getStations()`, computes both score components and the combined `priorityScore`. Stations with no current reading sort to the bottom rather than being dropped; stations with no last-week data get `trendDirection: "unknown"` instead of a guessed trend.
+
+**`components/HotspotPanel.tsx`:** ranked table (station, city, current AQI colored by the shared `aqi.ts` bands, trend arrow + actual % change, AQI score, trend score, combined priority score), styled to match the existing `bg-black/60 border border-white/10 rounded-2xl` card pattern. A visible amber disclaimer banner sits directly above the table (not a footnote): *"Ranked by observed AQI severity and trend — not by registered pollution source data, which is not yet available."*
+
+**Wired into `app/dashboard/page.tsx`** as a new tab ("Overview" / "Hotspot Prioritization") on the same route — no new page.
+
+**Verification (real data, direct SQL spot-check):**
+- Confirmed real data exists: 47,310 readings across 53 stations, spanning 2026-06-29 to 2026-07-21.
+- Ran a direct SQL query replicating the exact scoring formula and compared rank #1 vs rank #10: **#1 (Velachery Res. Area, Chennai — AQI 118.85, trend +31.7%, score 26.95)** beats **#10 (Adarsh Nagar, Jaipur — AQI 65.3, trend +21.8%, score 16.55)** on both individual components, not just the combined score — ranking is internally consistent.
+- `npm run build` — clean; `get_diagnostics` on all touched/created files — clean.
+
+## 9. Built: "Compare Cities" dashboard section
+
+Added a second new dashboard tab showing current AQI and next-24h forecast side-by-side across every city with active stations, for a national-picture-at-a-glance view.
+
+**Investigated reuse first, per the user's explicit instruction:** read `lib/chatTools.ts`'s `compareCitiesAqi()` — it picks ONE representative station per city (for a conversational chatbot answer) rather than averaging across all of a city's stations, so it wasn't reused directly for a dashboard aggregate. Documented this decision in a code comment; the underlying per-station queries (`getCurrentReading`, `getLatestForecasts`) are shared instead of duplicating query logic.
+
+**`lib/data.ts`:** added `CityComparisonEntry` type and `getCityComparison()` — for each city, averages current AQI and next-24h forecast AQI across that city's stations that have data, using `Promise.allSettled` (same fault-isolation pattern as `StationMap.tsx`) so one station's failure doesn't break the whole comparison. Cities are seeded up front from `getStations()` so a city where every station's query happens to fail still appears in the table as "no data" instead of silently vanishing. `delta = forecastAqi - currentAqi`, always `null` (never fabricated) when either side is missing.
+
+**`components/CityComparisonView.tsx`:** sortable table (click any column header, current AQI / forecast / delta / city name, nulls always sort to the bottom regardless of direction) plus a toggle to a Recharts grouped bar chart (current AQI vs forecast AQI per city), matching the existing dark-card visual style. Cities where **no** station has a trained-model forecast yet show italic "Forecast pending" text in that column instead of a blank cell or a guessed number.
+
+**Wired into `app/dashboard/page.tsx`** as a third tab ("Compare Cities") alongside Overview and Hotspot Prioritization — still one route, no fragmentation.
+
+**Verification (real data, cross-checked two independent ways):**
+- Direct SQL query replicating the exact aggregation (latest reading per station, avg of up to 24 horizon=6 forecast rows per station, grouped by city) against the live project.
+- Wrote a standalone Node script (`_verify_city_comparison.mjs`, deleted after use) that ran the **exact same TypeScript logic** as `getCityComparison()` against the live Supabase project via the public anon key — output matched the SQL spot-check exactly (e.g. Ahmedabad: current 144.34 → forecast 118.85; Chandigarh: current 8.34 → forecast 93.75).
+- Confirmed 18 distinct (non-identical) current-AQI values across the 18 cities that have reading data — not all placeholder/identical numbers.
+- Confirmed **Kochi** and **Visakhapatnam** (the two cities with zero readings and zero forecasts in the live DB) correctly report `stationsWithForecast: 0` and render "Forecast pending" without breaking the table layout.
+- `npm run build` — clean; `get_diagnostics` on all touched/created files — clean.
