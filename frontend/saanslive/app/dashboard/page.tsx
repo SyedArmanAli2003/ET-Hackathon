@@ -19,6 +19,7 @@ const StationMap = dynamic(
 
 import ForecastChart from "../../components/ForecastChart";
 import AdvisoryPanel from "../../components/AdvisoryPanel";
+import HotspotPanel from "../../components/HotspotPanel";
 import OnboardingModal from "../../components/OnboardingModal";
 import { usePreferences } from "../../lib/localPreferences";
 import { findNearestStation, requestGeolocation } from "../../lib/geolocation";
@@ -26,7 +27,10 @@ import { findNearestStation, requestGeolocation } from "../../lib/geolocation";
 const darkBgCard =
     "bg-black/70 border border-white/10 rounded-2xl p-4 backdrop-blur-md";
 
+type DashboardTab = "overview" | "hotspots";
+
 export default function DashboardPage() {
+    const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
     const [stations, setStations] = useState<Station[]>([]);
     const [selectedStationId, setSelectedStationId] = useState<string | null>(
         null
@@ -212,76 +216,107 @@ export default function DashboardPage() {
                     </div>
                 ) : null}
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <div className={darkBgCard}>
-                        <div className="mb-3">
-                            <div className="text-white/80 text-sm font-medium mb-2">City</div>
-                            <div className="flex flex-wrap gap-2">
-                                {cities.length === 0 && !stationsError ? (
-                                    <div className="text-white/60 text-sm">Loading cities…</div>
-                                ) : (
-                                    cities.map((city) => {
-                                        const active = city === selectedCity;
-                                        return (
-                                            <button
-                                                key={city}
-                                                onClick={() => onSelectCity(city)}
-                                                className={[
-                                                    "px-3 py-1.5 rounded-full text-sm border transition-colors",
-                                                    active
-                                                        ? "bg-white/20 border-white/40 text-white"
-                                                        : "bg-white/5 border-white/10 text-white/80 hover:bg-white/10",
-                                                ].join(" ")}
-                                            >
-                                                {city}
-                                            </button>
-                                        );
-                                    })
-                                )}
+                <div className="mb-5 flex gap-2 border-b border-white/10">
+                    {(
+                        [
+                            { id: "overview" as const, label: "Overview" },
+                            { id: "hotspots" as const, label: "Hotspot Prioritization" },
+                        ]
+                    ).map((tab) => {
+                        const active = tab.id === activeTab;
+                        return (
+                            <button
+                                key={tab.id}
+                                onClick={() => setActiveTab(tab.id)}
+                                className={[
+                                    "px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px",
+                                    active
+                                        ? "border-white text-white"
+                                        : "border-transparent text-white/50 hover:text-white/80",
+                                ].join(" ")}
+                            >
+                                {tab.label}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {activeTab === "overview" ? (
+                    <>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div className={darkBgCard}>
+                                <div className="mb-3">
+                                    <div className="text-white/80 text-sm font-medium mb-2">City</div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {cities.length === 0 && !stationsError ? (
+                                            <div className="text-white/60 text-sm">Loading cities…</div>
+                                        ) : (
+                                            cities.map((city) => {
+                                                const active = city === selectedCity;
+                                                return (
+                                                    <button
+                                                        key={city}
+                                                        onClick={() => onSelectCity(city)}
+                                                        className={[
+                                                            "px-3 py-1.5 rounded-full text-sm border transition-colors",
+                                                            active
+                                                                ? "bg-white/20 border-white/40 text-white"
+                                                                : "bg-white/5 border-white/10 text-white/80 hover:bg-white/10",
+                                                        ].join(" ")}
+                                                    >
+                                                        {city}
+                                                    </button>
+                                                );
+                                            })
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div style={{ borderRadius: 16, overflow: "hidden" }}>
+                                    <StationMap
+                                        onStationSelect={(stationId) => {
+                                            setSelectedStationId(stationId);
+                                            setLocationSource(null); // manual override
+                                        }}
+                                    />
+                                </div>
                             </div>
-                        </div>
 
-                        <div style={{ borderRadius: 16, overflow: "hidden" }}>
-                            <StationMap
-                                onStationSelect={(stationId) => {
-                                    setSelectedStationId(stationId);
-                                    setLocationSource(null); // manual override
-                                }}
-                            />
-                        </div>
-                    </div>
-
-                    <div className="flex flex-col gap-4">
-                        <ForecastChart
-                            forecasts={forecasts}
-                            currentAqi={currentAqi}
-                            loading={stationDataLoading}
-                            error={stationDataError}
-                        />
-
-                        <div id="advisory">
-                            {selectedStation ? (
-                                <AdvisoryPanel
-                                    station={selectedStation}
+                            <div className="flex flex-col gap-4">
+                                <ForecastChart
                                     forecasts={forecasts}
-                                    currentReading={currentReading}
-                                    vulnerabilityFlags={preferences.vulnerability_flags}
-                                    preferredLanguage={preferences.preferred_language}
+                                    currentAqi={currentAqi}
                                     loading={stationDataLoading}
                                     error={stationDataError}
                                 />
-                            ) : (
-                                <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
-                                    Select a station to see the advisory.
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
 
-                {loading ? (
-                    <div className="mt-4 text-white/60 text-sm">Loading data…</div>
-                ) : null}
+                                <div id="advisory">
+                                    {selectedStation ? (
+                                        <AdvisoryPanel
+                                            station={selectedStation}
+                                            forecasts={forecasts}
+                                            currentReading={currentReading}
+                                            vulnerabilityFlags={preferences.vulnerability_flags}
+                                            preferredLanguage={preferences.preferred_language}
+                                            loading={stationDataLoading}
+                                            error={stationDataError}
+                                        />
+                                    ) : (
+                                        <div className="bg-black/60 border border-white/10 rounded-2xl p-4">
+                                            Select a station to see the advisory.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {loading ? (
+                            <div className="mt-4 text-white/60 text-sm">Loading data…</div>
+                        ) : null}
+                    </>
+                ) : (
+                    <HotspotPanel />
+                )}
             </div>
         </div>
     );

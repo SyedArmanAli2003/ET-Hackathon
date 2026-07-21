@@ -47,6 +47,34 @@ export interface Reading {
   pm25: number;
 }
 
+/**
+ * One ranked row for the Hotspot Prioritization panel.
+ *
+ * Every field here is derived directly from `readings` — nothing is
+ * invented. `trendDirection`/`trendChangePct` compare this week's average
+ * AQI against last week's average AQI for the same station.
+ */
+export interface HotspotRankingEntry {
+  station: Station;
+  /** Most recent AQI reading for this station. Null if the station has no readings at all. */
+  currentAqi: number | null;
+  /** ISO timestamp of the current reading, or null if none exists. */
+  currentReadingAt: string | null;
+  /** Average AQI over the last 7 days. Null if there are no readings in that window. */
+  avgAqiThisWeek: number | null;
+  /** Average AQI over the 7 days before that. Null if there are no readings in that window. */
+  avgAqiLastWeek: number | null;
+  /** % change of this week's average vs last week's (positive = worsening). Null if last week has no data to compare against. */
+  trendChangePct: number | null;
+  trendDirection: "worsening" | "improving" | "stable" | "unknown";
+  /** current_aqi component of the score, normalized to 0-1 against a 500 AQI ceiling. */
+  aqiComponent: number;
+  /** trend component of the score, normalized to 0-1 (clamped ±100% change). */
+  trendComponent: number;
+  /** priorityScore = aqiComponent * 0.6 + trendComponent * 0.4, on a 0-100 scale. Higher = more urgent. */
+  priorityScore: number;
+}
+
 // =============================================================================
 // Public API — three async functions, one per Supabase table
 // =============================================================================
@@ -190,4 +218,128 @@ export async function getCurrentReading(stationId: string): Promise<Reading | nu
     aqi:  Number(data.aqi),
     pm25: Number(data.pm25),
   };
+}
+
+// =============================================================================
+// Hotspot Prioritization
+// =============================================================================
+
+/** Raw row shape returned by the `get_hotspot_ranking_stats` Postgres function. */
+interface HotspotStatsRow {
+  station_id: string;
+  current_aqi: string | number | null;
+  current_reading_at: string | null;
+  avg_aqi_this_week: string | number | null;
+  readings_this_week: string | number;
+  avg_aqi_last_week: string | number | null;
+  readings_last_week: string | number;
+}
+
+// AQI ceiling used to normalize the "current severity" component to 0-1.
+// 500 is the top of the US EPA AQI scale (see lib/aqi.ts bands, which cap at
+// "Hazardous" for 301+); values above it are clamped rather than exceeding 1.
+const AQI_NORMALIZATION_CEILING = 500;
+
+// The trend component clamps % change to ±100 before normalizing to 0-1, so
+// one extreme outlier station can't blow the trend axis out of proportion
+// relative to every other station's trend.
+const TREND_CLAMP_PCT = 100;
+
+const PRIORITY_WEIGHT_AQI = 0.6;
+const PRIORITY_WEIGHT_TREND = 0.4;
+
+/**
+ * Return every station ranked by how urgently it warrants attention, using
+ * only real numbers already in `readings`:
+ *
+ *   1. current_aqi   — the station's most recent reading (higher = more urgent)
+ *   2. trend_change_pct — % change of this week's average AQI vs last week's
+ *      average AQI (worsening = more urgent)
+ *
+ * priorityScore = aqiComponent * 0.6 + trendComponent * 0.4 (0-100 scale).
+ * Both components are returned alongside the combined score so the UI can
+ * show the breakdown rather than a single opaque number.
+ *
+ * This does NOT rank by registered pollution source / emitter data — that
+ * data does not exist in this schema. See the disclaimer surfaced in
+ * HotspotPanel.tsx.
+ *
+ * Throws on a genuine query failure so the caller can show a distinct error
+ * state. Stations with zero readings are included with null AQI/trend
+ * fields and sort to the bottom, rather than being silently dropped.
+ */
+export async function getHotspotRanking(): Promise<HotspotRankingEntry[]> {
+  const [stations, statsResult] = await Promise.all([
+    getStations(),
+    supabase.rpc("get_hotspot_ranking_stats"),
+  ]);
+
+  const { data, error } = statsResult;
+
+  if (error) {
+    console.error("[getHotspotRanking] Supabase error:", error.message);
+    throw new Error("Failed to load the hotspot ranking. Please try again.");
+  }
+
+  const statsByStationId = new Map<string, HotspotStatsRow>(
+    ((data ?? []) as HotspotStatsRow[]).map((row) => [row.station_id, row])
+  );
+
+  const entries: HotspotRankingEntry[] = stations.map((station) => {
+    const stats = statsByStationId.get(station.id);
+
+    const currentAqi = stats?.current_aqi != null ? Number(stats.current_aqi) : null;
+    const avgAqiThisWeek = stats?.avg_aqi_this_week != null ? Number(stats.avg_aqi_this_week) : null;
+    const avgAqiLastWeek = stats?.avg_aqi_last_week != null ? Number(stats.avg_aqi_last_week) : null;
+
+    // Trend: % change of this week's average vs last week's. Requires both
+    // weeks to have at least one reading — otherwise there's nothing real
+    // to compare, so it's reported as "unknown" rather than guessed at.
+    let trendChangePct: number | null = null;
+    let trendDirection: HotspotRankingEntry["trendDirection"] = "unknown";
+
+    if (avgAqiThisWeek != null && avgAqiLastWeek != null && avgAqiLastWeek > 0) {
+      trendChangePct = ((avgAqiThisWeek - avgAqiLastWeek) / avgAqiLastWeek) * 100;
+      if (trendChangePct > 1) trendDirection = "worsening";
+      else if (trendChangePct < -1) trendDirection = "improving";
+      else trendDirection = "stable";
+    }
+
+    const aqiComponent =
+      currentAqi != null
+        ? Math.min(1, Math.max(0, currentAqi / AQI_NORMALIZATION_CEILING))
+        : 0;
+
+    const trendComponent =
+      trendChangePct != null
+        ? Math.min(1, Math.max(0, trendChangePct / TREND_CLAMP_PCT)) // negative (improving) clamps to 0 urgency
+        : 0;
+
+    const priorityScore =
+      (aqiComponent * PRIORITY_WEIGHT_AQI + trendComponent * PRIORITY_WEIGHT_TREND) * 100;
+
+    return {
+      station,
+      currentAqi,
+      currentReadingAt: stats?.current_reading_at ?? null,
+      avgAqiThisWeek,
+      avgAqiLastWeek,
+      trendChangePct,
+      trendDirection,
+      aqiComponent,
+      trendComponent,
+      priorityScore,
+    };
+  });
+
+  // Rank: stations with no current reading at all sort last (nothing to
+  // prioritize), everyone else by priorityScore descending.
+  entries.sort((a, b) => {
+    if (a.currentAqi == null && b.currentAqi == null) return 0;
+    if (a.currentAqi == null) return 1;
+    if (b.currentAqi == null) return -1;
+    return b.priorityScore - a.priorityScore;
+  });
+
+  return entries;
 }
