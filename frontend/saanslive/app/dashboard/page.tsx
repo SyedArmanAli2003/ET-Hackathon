@@ -20,6 +20,7 @@ const StationMap = dynamic(
 import ForecastChart from "../../components/ForecastChart";
 import AdvisoryPanel from "../../components/AdvisoryPanel";
 import HotspotPanel from "../../components/HotspotPanel";
+import CityComparisonView from "../../components/CityComparisonView";
 import OnboardingModal from "../../components/OnboardingModal";
 import { usePreferences } from "../../lib/localPreferences";
 import { findNearestStation, requestGeolocation } from "../../lib/geolocation";
@@ -27,7 +28,7 @@ import { findNearestStation, requestGeolocation } from "../../lib/geolocation";
 const darkBgCard =
     "bg-black/70 border border-white/10 rounded-2xl p-4 backdrop-blur-md";
 
-type DashboardTab = "overview" | "hotspots";
+type DashboardTab = "overview" | "hotspots" | "compare";
 
 export default function DashboardPage() {
     const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
@@ -221,6 +222,7 @@ export default function DashboardPage() {
                         [
                             { id: "overview" as const, label: "Overview" },
                             { id: "hotspots" as const, label: "Hotspot Prioritization" },
+                            { id: "compare" as const, label: "Compare Cities" },
                         ]
                     ).map((tab) => {
                         const active = tab.id === activeTab;
@@ -314,8 +316,10 @@ export default function DashboardPage() {
                             <div className="mt-4 text-white/60 text-sm">Loading data…</div>
                         ) : null}
                     </>
-                ) : (
+                ) : activeTab === "hotspots" ? (
                     <HotspotPanel />
+                ) : (
+                    <CityComparisonView />
                 )}
             </div>
         </div>

@@ -75,6 +75,26 @@ export interface HotspotRankingEntry {
   priorityScore: number;
 }
 
+/**
+ * One row for the "Compare Cities" panel — a city-level aggregate built
+ * purely from real station-level readings/forecasts, no invented numbers.
+ */
+export interface CityComparisonEntry {
+  city: string;
+  /** Average of the most recent reading's AQI across stations in this city that have one. Null if none do. */
+  currentAqi: number | null;
+  /** How many of this city's stations contributed to currentAqi. */
+  stationsWithReading: number;
+  /** Total stations tracked in this city, regardless of data availability. */
+  totalStations: number;
+  /** Average predicted AQI (horizon_hours=6) across stations in this city that have a trained forecast. Null = "forecast pending". */
+  forecastAqi: number | null;
+  /** How many of this city's stations contributed to forecastAqi. */
+  stationsWithForecast: number;
+  /** forecastAqi - currentAqi. Null whenever either side is missing — never fabricated. */
+  delta: number | null;
+}
+
 // =============================================================================
 // Public API — three async functions, one per Supabase table
 // =============================================================================
@@ -340,6 +360,120 @@ export async function getHotspotRanking(): Promise<HotspotRankingEntry[]> {
     if (b.currentAqi == null) return -1;
     return b.priorityScore - a.priorityScore;
   });
+
+  return entries;
+}
+
+// =============================================================================
+// Compare Cities
+// =============================================================================
+
+/**
+ * Return every city with at least one monitored station, each with its
+ * current AQI (averaged across that city's stations) and next-24h forecast
+ * AQI (averaged across horizon_hours=6 forecast rows for that city's
+ * stations), plus the delta between them.
+ *
+ * Built entirely on top of the existing getStations / getCurrentReading /
+ * getLatestForecasts queries above — no new raw Supabase calls. This is a
+ * different aggregation than chatTools.ts's compareCitiesAqi(), which picks
+ * ONE representative station per city (for a conversational answer) rather
+ * than averaging across all of a city's stations, so it wasn't reused
+ * directly; the underlying per-station queries are shared instead.
+ *
+ * A city shows forecastAqi = null ("forecast pending" in the UI) when NONE
+ * of its stations have a trained-model forecast yet — this is never
+ * fabricated or interpolated from currentAqi.
+ *
+ * Throws only if the initial station list fails to load; a single
+ * station's reading/forecast failure is logged and excluded from that
+ * city's average rather than failing the whole comparison (same
+ * allSettled pattern as StationMap.tsx).
+ */
+export async function getCityComparison(): Promise<CityComparisonEntry[]> {
+  const stations = await getStations();
+
+  const perStationResults = await Promise.allSettled(
+    stations.map(async (station) => {
+      const [reading, forecasts] = await Promise.all([
+        getCurrentReading(station.id),
+        getLatestForecasts(station.id),
+      ]);
+
+      const forecastAvg =
+        forecasts.length > 0
+          ? forecasts.reduce((sum, f) => sum + f.predicted_aqi, 0) / forecasts.length
+          : null;
+
+      return {
+        city: station.city,
+        currentAqi: reading?.aqi ?? null,
+        forecastAqi: forecastAvg,
+      };
+    })
+  );
+
+  type CityAgg = {
+    totalStations: number;
+    currentSum: number;
+    currentCount: number;
+    forecastSum: number;
+    forecastCount: number;
+  };
+  const byCity = new Map<string, CityAgg>();
+
+  // Seed every city up front so cities where every station happens to have
+  // failed/missing data still appear in the table (as "no data"), instead
+  // of silently vanishing from the comparison.
+  for (const station of stations) {
+    if (!byCity.has(station.city)) {
+      byCity.set(station.city, {
+        totalStations: 0,
+        currentSum: 0,
+        currentCount: 0,
+        forecastSum: 0,
+        forecastCount: 0,
+      });
+    }
+    byCity.get(station.city)!.totalStations += 1;
+  }
+
+  for (const result of perStationResults) {
+    if (result.status !== "fulfilled") {
+      console.error("[getCityComparison] Failed to load a station's data:", result.reason);
+      continue;
+    }
+    const { city, currentAqi, forecastAqi } = result.value;
+    const agg = byCity.get(city);
+    if (!agg) continue;
+
+    if (currentAqi != null) {
+      agg.currentSum += currentAqi;
+      agg.currentCount += 1;
+    }
+    if (forecastAqi != null) {
+      agg.forecastSum += forecastAqi;
+      agg.forecastCount += 1;
+    }
+  }
+
+  const entries: CityComparisonEntry[] = Array.from(byCity.entries()).map(([city, agg]) => {
+    const currentAqi = agg.currentCount > 0 ? agg.currentSum / agg.currentCount : null;
+    const forecastAqi = agg.forecastCount > 0 ? agg.forecastSum / agg.forecastCount : null;
+    const delta = currentAqi != null && forecastAqi != null ? forecastAqi - currentAqi : null;
+
+    return {
+      city,
+      currentAqi,
+      stationsWithReading: agg.currentCount,
+      totalStations: agg.totalStations,
+      forecastAqi,
+      stationsWithForecast: agg.forecastCount,
+      delta,
+    };
+  });
+
+  entries.sort((a, b) => a.city.localeCompare(b.city));
 
   return entries;
 }
