@@ -663,3 +663,52 @@ Added a second new dashboard tab showing current AQI and next-24h forecast side-
 - Confirmed 18 distinct (non-identical) current-AQI values across the 18 cities that have reading data — not all placeholder/identical numbers.
 - Confirmed **Kochi** and **Visakhapatnam** (the two cities with zero readings and zero forecasts in the live DB) correctly report `stationsWithForecast: 0` and render "Forecast pending" without breaking the table layout.
 - `npm run build` — clean; `get_diagnostics` on all touched/created files — clean.
+
+## 10. Retrained model against the full current 20-city station list
+
+User asked to re-run `model/train.py` against the CURRENT full `stations` table (20 cities), not whatever subset it was last trained against — with an explicit before/after artifact inventory, no changes to the underlying pipeline logic, honest skip-and-log for any city that can't produce a usable model, then `predict.py` to actually populate forecasts, then verification via direct SQL (not the script's own log).
+
+**Before — artifact inventory:**
+- `model/artifacts/` had `_6h.pkl` artifacts for 18 cities: Ahmedabad, Bengaluru, Bhopal, Chandigarh, Chennai, Delhi, Guwahati, Hyderabad, Indore, Jaipur, Kanpur, Kolkata, Lucknow, Mumbai, Nagpur, Patna, Pune, Surat.
+- Missing entirely from the 20-city `stations` table: **Kochi**, **Visakhapatnam**.
+- `forecasts` table before retrain: 18/20 cities had ≥1 `horizon_hours=6` row (Kochi and Visakhapatnam had zero — confirmed via direct query that both have **zero rows in `readings`**, not just a sparse history).
+
+**Training run — `model/train.py --horizon 6 --model both`, no logic changes, full current data (47,310 readings, 522.25h span, both models, all 20 cities queried):**
+
+Only 18 of the 20 cities entered the pipeline at all — Kochi and Visakhapatnam were excluded before training even started, because they have zero rows in `readings` (never ingested, not an insufficient-history case). This is a data-ingestion gap, not something retraining can fix.
+
+| City | Trained/Skipped | XGB RMSE vs baseline | Skip reason |
+|---|---|---|---|
+| Surat | Trained | 25.34 vs 39.89 (+36.5%) | — |
+| Guwahati | Trained | 30.13 vs 44.12 (+31.7%) | — |
+| Bhopal | Trained | 39.35 vs 56.94 (+30.9%) | — |
+| Mumbai | Trained | 23.40 vs 32.55 (+28.1%) | — |
+| Ahmedabad | Trained | 33.65 vs 46.19 (+27.1%) | — |
+| Delhi | Trained | 29.99 vs 39.20 (+23.5%) | — |
+| Pune | Trained | 12.32 vs 15.00 (+17.9%) | — |
+| Kolkata | Trained | 19.41 vs 22.59 (+14.1%) | — |
+| Chandigarh | Trained | 31.06 vs 36.14 (+14.1%) | — |
+| Kanpur | Trained | 22.07 vs 24.68 (+10.6%) | — |
+| Jaipur | Trained | 37.01 vs 41.21 (+10.2%) | — |
+| Chennai | Trained | 15.29 vs 16.76 (+8.8%) | — |
+| Bengaluru | Trained | 10.72 vs 11.71 (+8.4%) | — |
+| Nagpur | Trained | 35.83 vs 35.82 (≈0%, tie) | — |
+| Patna | Trained | 24.33 vs 21.93 (-10.9%, baseline wins) | — |
+| Indore | Trained | 26.59 vs 19.20 (-38.5%, baseline wins) | — |
+| Hyderabad | Trained | 25.96 vs 14.97 (-73.4%, baseline wins) | — |
+| Lucknow | Trained | 50.80 vs 27.73 (-83.2%, baseline wins) | — |
+| Kochi | **Skipped** | — | 0 rows in `readings` — station has never received a single ingested reading |
+| Visakhapatnam | **Skipped** | — | 0 rows in `readings` — station has never received a single ingested reading |
+
+XGB won 13/18, LGBM won 14/18 head-to-head (`predict.py` defaults to XGB, so the table above is what feeds the live `forecasts` table). All 18 artifacts overwritten with fresh timestamps, trained on the full 522h dataset instead of whatever earlier/smaller snapshot they last saw.
+
+**Prediction run — `model/predict.py --horizon 6 --model xgb`:** built 46 latest-feature rows (one per station with data), skipped 1 explicitly with a logged reason (`[Mumbai] 1 feature(s) NaN: aqi_lag_24h — model was never trained on incomplete rows` — this was **Powai, Mumbai**, only 69 readings spanning 18.75h, not enough history for a 24h lag feature yet). Inserted 42 new forecast rows; 3 were duplicate-window conflicts correctly `DO NOTHING`'d.
+
+**Verification via direct Supabase SQL query (not the script's own log):**
+- Cities with ≥1 forecast row: **18/20 before and after** — Kochi and Visakhapatnam remain the only gaps, confirmed to be a data-ingestion problem (zero readings ever), not something training/prediction can address.
+- Total `horizon_hours=6` forecast rows: 145 across 45 distinct stations after the run.
+- Found and confirmed two individual station-level gaps within otherwise-working cities: **Bidhannagar, Kolkata** (0 readings, 0 forecasts) and **Powai, Mumbai** (69 readings, 0 forecasts, station too new) — every other station in every trainable city has a forecast.
+- Spot-checked Mumbai and Kolkata (the user's named "previously broken" examples) with the exact aggregation query the dashboard runs: both show real, distinct current-AQI and 24h-forecast-average numbers per station (e.g. Kolkata Fort William 40.42 -> 78.80; Mumbai Kurla 90.94 -> 77.38), confirming Hotspot Prioritization and Compare Cities render real numbers for them, not "forecast pending."
+- Corrected the task's premise where warranted: Mumbai and Kolkata were not actually city-level "forecast pending" before this task (they already had artifacts and forecast rows from a prior run) — what this task fixed was retraining all 18 feasible cities against the full current 522h/47K-row dataset instead of a stale snapshot, and confirming the two real remaining gaps (Kochi/Visakhapatnam at the city level; Bidhannagar/Powai at the station level) are honestly logged data-availability issues, not silently dropped.
+
+Temporary log files (`train_run_log.txt`, `predict_run_log.txt`) created during the run were deleted after verification; no `--no-save` flag was used, so the retrain intentionally overwrote all prior artifacts in `model/artifacts/`.
