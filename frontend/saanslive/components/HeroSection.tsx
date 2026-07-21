@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Menu, X, Wind, Brain, Bell, MapPin, ArrowRight } from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
+import { Menu, X, Brain, Bell, MapPin, ArrowRight, MessageCircle, TrendingUp, BarChart3 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { getStations, getCurrentReading, type Station } from "../lib/data";
@@ -25,13 +25,17 @@ const SPOTLIGHT_R = 320;
 //   2. Cursor position was React state (setCursorPos), so every mousemove
 //      tick re-rendered the ENTIRE HeroSection tree -- including
 //      FeaturesSection, HowItWorksSection, CtaSection, Footer, and
-//      LiveAqiStrip, none of which are memoized -- 60 times per second,
+//      LiveAqiStrip, none of which were memoized -- 60 times per second,
 //      for a purely visual effect that never needed React reconciliation.
 // Fix: RevealLayer now takes refs, not props, and the parent writes
 // directly to the DOM inside the RAF loop via imperative style updates.
 // No React state, no re-renders, no canvas encoding -- just GPU-composited
 // CSS (mask-image position + transform), which is what this kind of
-// pointer-follow effect should cost.
+// pointer-follow effect should cost. As a second layer of defense (in case
+// HeroSection's own state -- e.g. mobileMenuOpen -- ever changes while the
+// cursor is moving), FeaturesSection/HowItWorksSection/CtaSection/Footer/
+// LiveAqiStrip are all wrapped in React.memo() below so a parent re-render
+// doesn't cascade into re-rendering these static/self-contained sections.
 function RevealLayer({
   image,
   revealRef,
@@ -90,7 +94,7 @@ const NAV_ITEMS = [
 // type must reflect that possibility instead of lying about it.
 type CityAqi = { city: string; aqi: number | null; band: SeverityBand | null };
 
-function LiveAqiStrip() {
+const LiveAqiStrip = memo(function LiveAqiStrip() {
   const [data, setData] = useState<CityAqi[]>([]);
 
   useEffect(() => {
@@ -158,7 +162,7 @@ function LiveAqiStrip() {
       </div>
     </div>
   );
-}
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Features section
@@ -173,14 +177,26 @@ const FEATURES = [
   {
     icon: MapPin,
     title: "Hyperlocal Coverage",
-    desc: "29 active monitoring stations across 17 Indian cities. View color-coded AQI markers on an interactive map and click any to drill in.",
+    desc: "53 active monitoring stations across 20 Indian cities. View color-coded AQI markers on an interactive map and click any to drill in.",
     color: "#3b82f6",
   },
   {
-    icon: Wind,
-    title: "Real-Time Ingestion",
-    desc: "Data flows automatically from OpenAQ every 5 hours via a fault-isolated GitHub Actions pipeline — no manual intervention needed.",
-    color: "#10b981",
+    icon: MessageCircle,
+    title: "AI Assistant",
+    desc: "Ask questions about any station's air quality in plain language. Every answer is grounded in live Supabase data — not a generic chatbot guessing numbers.",
+    color: "#22d3ee",
+  },
+  {
+    icon: TrendingUp,
+    title: "Hotspot Prioritization",
+    desc: "Ranks stations by real AQI severity and 7-day trend, with both components shown separately — an auditable score, not a mystery number.",
+    color: "#f43f5e",
+  },
+  {
+    icon: BarChart3,
+    title: "City Comparison",
+    desc: "See current AQI and forecasted AQI across every covered city at a glance, side-by-side as a sortable table or bar chart.",
+    color: "#a855f7",
   },
   {
     icon: Bell,
@@ -190,7 +206,7 @@ const FEATURES = [
   },
 ];
 
-function FeaturesSection() {
+const FeaturesSection = memo(function FeaturesSection() {
   return (
     <section className="w-full bg-[#050505] py-20 px-4 sm:px-6">
       <div className="max-w-7xl mx-auto">
@@ -206,7 +222,7 @@ function FeaturesSection() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {FEATURES.map((f) => (
             <div
               key={f.title}
@@ -226,7 +242,7 @@ function FeaturesSection() {
       </div>
     </section>
   );
-}
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // How it works section
@@ -236,9 +252,10 @@ const STEPS = [
   { num: "02", title: "Pipeline ingests & enriches", desc: "Our GitHub Actions pipeline fetches readings, pairs them with weather data from Open-Meteo, and stores everything in Supabase." },
   { num: "03", title: "AI model predicts", desc: "An XGBoost model uses the enriched feature vector to predict AQI 6 hours ahead and writes it to the forecasts table." },
   { num: "04", title: "You see the future", desc: "The dashboard serves live data directly from Supabase — no caching lag, always the freshest reading and forecast available." },
+  { num: "05", title: "Ask anything", desc: "A live AI assistant answers questions about any station, grounded in real Supabase data — never a guess." },
 ];
 
-function HowItWorksSection() {
+const HowItWorksSection = memo(function HowItWorksSection() {
   return (
     <section className="w-full bg-[#0a0a0a] border-t border-white/5 py-20 px-4 sm:px-6">
       <div className="max-w-7xl mx-auto">
@@ -252,7 +269,7 @@ function HowItWorksSection() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
           {STEPS.map((step, i) => (
             <div key={step.num} className="relative">
               {i < STEPS.length - 1 && (
@@ -269,12 +286,12 @@ function HowItWorksSection() {
       </div>
     </section>
   );
-}
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Final CTA section
 // ─────────────────────────────────────────────────────────────────────────────
-function CtaSection() {
+const CtaSection = memo(function CtaSection() {
   return (
     <section className="w-full bg-[#050505] border-t border-white/5 py-20 px-4 sm:px-6">
       <div className="max-w-3xl mx-auto text-center">
@@ -303,12 +320,12 @@ function CtaSection() {
       </div>
     </section>
   );
-}
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Footer
 // ─────────────────────────────────────────────────────────────────────────────
-function Footer() {
+const Footer = memo(function Footer() {
   return (
     <footer className="w-full bg-black border-t border-white/5 py-8 px-4 sm:px-6">
       <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -326,7 +343,7 @@ function Footer() {
       </div>
     </footer>
   );
-}
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main HeroSection export

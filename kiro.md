@@ -712,3 +712,52 @@ XGB won 13/18, LGBM won 14/18 head-to-head (`predict.py` defaults to XGB, so the
 - Corrected the task's premise where warranted: Mumbai and Kolkata were not actually city-level "forecast pending" before this task (they already had artifacts and forecast rows from a prior run) — what this task fixed was retraining all 18 feasible cities against the full current 522h/47K-row dataset instead of a stale snapshot, and confirming the two real remaining gaps (Kochi/Visakhapatnam at the city level; Bidhannagar/Powai at the station level) are honestly logged data-availability issues, not silently dropped.
 
 Temporary log files (`train_run_log.txt`, `predict_run_log.txt`) created during the run were deleted after verification; no `--no-save` flag was used, so the retrain intentionally overwrote all prior artifacts in `model/artifacts/`.
+
+## 11. Diagnosed and fixed: "changes aren't visible in my frontend"
+
+User reported that recent dashboard changes (Hotspot Prioritization, Compare Cities tabs) weren't showing up on the live site.
+
+**Root cause found (not assumed):** ran `git log`/`git status` first and confirmed the code WAS correctly committed to `origin/main` on `github.com/SyedArmanAli2003/ET-Hackathon` — so the problem wasn't a missing commit. Installed the Vercel CLI (`npm install -g vercel`) and ran `vercel ls saanslive` — found the last 4+ production deployments had all failed with `Error` status. Ran `vercel inspect <deployment> --logs` on the most recent failure and found the actual cause: **Vercel's GitHub integration for the `saanslive` project was connected to a completely different repository** (`github.com/SyedArmanAli2003/SaanSLive`), not `ET-Hackathon`. Every commit made in this workspace was correctly pushed to `ET-Hackathon` but Vercel was still trying to auto-deploy from the other repo, whose build was failing with `Couldn't find any pages or app directory` (root-directory mismatch there).
+
+**Fix applied:** ran `vercel --prod --yes` from `frontend/saanslive` to deploy directly from the local, correct code, bypassing the broken GitHub integration. Deployment succeeded and re-aliased `saanslive.vercel.app` to the new build.
+
+**Verification:** initial `web_fetch` of the live URL still showed the old (cached) content — didn't stop there. Cross-checked with a fresh `curl` request (cache-busting query param) against `saanslive.vercel.app/dashboard` and confirmed the raw HTML now contains both `Hotspot Prioritization` and `Compare Cities` tab buttons. Also fetched the deployment's own alias list (`vercel alias ls`) to confirm `saanslive.vercel.app` actually points at the new deployment ID.
+
+**Flagged, not fixed (outside safe scope):** the underlying GitHub integration is still pointed at the wrong repo, so every future `git push` to `ET-Hackathon` will silently NOT auto-deploy until the user reconnects the integration (or pushes to whichever repo `SaanSLive` actually is) via the Vercel dashboard → Settings → Git. Explained the two options and asked the user to choose rather than silently reconfiguring their deployment pipeline.
+
+## 12. Rewrote README.md to reflect the current project state
+
+User asked to rewrite `README.md` "according to latest change of the project" — read the existing README in full first, then cross-checked every claim against the actual current codebase and live database rather than editing in place blindly.
+
+**Verified against real sources before writing:**
+- `list_directory` on the full repo tree and `frontend/saanslive/{app,components,lib}` to get the accurate current file inventory (including files added in this session: `HotspotPanel.tsx`, `CityComparisonView.tsx`, `chatTools.ts`, `AqiChatbot.tsx`, `nimModels.ts`, `generateAdvisory.ts`, `app/api/advisory/route.ts`, `app/api/chat/route.ts`, `supabase/migrations/`).
+- Live Supabase row counts via direct SQL: `stations`=53, `readings`=47,310, `weather`=17,099, `forecasts`=145, `user_profiles`=0 — replacing the stale 2026-07-08 snapshot (29/3,860/1,853/19/0) in the old README.
+- Re-pulled the exact retrained model performance numbers from §10 (median RMSE 26.27 vs baseline 30.14, 13/18 stations beating baseline) instead of the old README's stale 22h-of-data numbers (median RMSE 6.86, +57.4%).
+- Read `package.json`, `lib/nimModels.ts`, and `app/api/advisory/route.ts` to accurately document the NVIDIA NIM model cascade in the tech stack table.
+
+**Rewrote:**
+- Live Dashboard section — now describes all three tabs (Overview / Hotspot Prioritization / Compare Cities) plus the floating AI chatbot, instead of the old single-view description.
+- Architecture diagram — extended to show `lib/data.ts` feeding the three dashboard tabs and `lib/chatTools.ts` + `app/api/advisory` feeding the AI layer.
+- Repository Structure — full current file listing for `lib/` and `components/`, added `supabase/migrations/` and `kiro.md`.
+- Database Schema table — current live row counts, added a note on the `get_hotspot_ranking_stats()` Postgres function and its RLS/security posture, and an honest callout that Kochi/Visakhapatnam have zero ingested readings.
+- Model Performance section — replaced the old 9-city/22h numbers with the real 18-city/522h retrain results from §10, including which cities underperform the baseline and why (reported honestly, not hidden).
+- Tech Stack table — added the AI/NVIDIA NIM row and Vercel deployment row, which weren't in the original.
+- Added a link to `kiro.md` alongside the existing `report.md` reference.
+
+## 13. HeroSection.tsx: updated FEATURES/STEPS content, fixed the flagged memoization gap
+
+Two-part request: update landing-page content to reflect the AI chatbot/Hotspot/Compare-Cities features, and actually fix the re-render issue that the code's own comment had flagged as unresolved (rather than leaving the comment stale).
+
+**Content updates:**
+- `FEATURES` array: kept "AI-Powered Forecasts" and "Personalized Advisories," updated "Hyperlocal Coverage" to the current real numbers (53 stations / 20 cities, was 29/17), removed "Real-Time Ingestion" (and its now-unused `Wind` icon import) to make room, and added three new cards — "AI Assistant" (`MessageCircle` icon), "Hotspot Prioritization" (`TrendingUp` icon), "City Comparison" (`BarChart3` icon) — landing at 6 cards total, within the requested 4-6 range. Grid changed from `lg:grid-cols-4` to `lg:grid-cols-3` so 6 cards lay out as two even rows instead of 4+2.
+- `STEPS` array: added step 05 — "Ask anything" / "A live AI assistant answers questions about any station, grounded in real Supabase data — never a guess." Grid widened from `lg:grid-cols-4` to `lg:grid-cols-5`.
+- All existing visual styling/classNames left untouched — content-only change, confirmed via `npm run build` producing no new CSS/layout errors.
+
+**Memoization fix (the actual bug, not just content):**
+- The existing code comment on `RevealLayer` explicitly said `FeaturesSection`, `HowItWorksSection`, `CtaSection`, `Footer`, and `LiveAqiStrip` "are not memoized" as a known residual risk, even after the cursor-position React-state removal from a prior session. Wrapped all five in `React.memo()` and updated the comment to describe the fix instead of flagging it as still-open.
+
+**Real verification, not assumed:** the RAF loop itself no longer touches React state (fixed in a prior session), so proving the memo fix mattered required actually simulating mouse movement, not just reading the code. Installed `puppeteer-core` (dev-only, removed after), launched headless Edge (`msedge.exe --headless=new`), loaded `localhost:3000`, and captured `console.log` output from temporary `[render-count]` markers added to each of the 5 components plus the parent `HeroSection`. Simulated ~125 `page.mouse.move()` events over 2 seconds (~60fps) directly through the browser's real mousemove event path.
+
+**Result:** render counts for all 5 memoized components were byte-identical before and after the simulated mousemove burst (e.g. `FeaturesSection`: 2 renders both before and after — the 2x is React 19 dev-mode's known double-invoke, unrelated to cursor movement; `LiveAqiStrip`: 4 both times, from its own async data-fetch state update, also unrelated). **Zero additional renders** were caused by 125 mousemove events across any of the 5 sections — confirming the memoization actually works, not just that it compiles.
+
+**Cleanup:** removed all 6 temporary `console.log("[render-count] ...")` lines from the component, deleted the verification script, uninstalled `puppeteer-core` (`git status` confirmed no `package.json`/`package-lock.json` diff afterward), and re-ran `npm run build` for a final clean check.
