@@ -8,12 +8,18 @@
  * client (lib/generateAdvisory.ts) POSTs the already-computed template data
  * here instead of calling NVIDIA directly.
  *
- * PROVIDER
- * --------
- * NVIDIA NIM using a model selected from a server-side allowlist. If the
- * request fails or the key is not configured, the route returns { polished: null }
- * so the client falls back to the deterministic template. This route is
- * NEVER the only path to a displayed advisory.
+ * CASCADE STRATEGY
+ * ----------------
+ * Primary  : minimaxai/minimax-m3      — fastest, most reliable on free pool
+ * Fallback1: openai/gpt-oss-120b
+ * Fallback2: deepseek-ai/deepseek-v4-flash
+ *
+ * When no model is specified by the client, all three are tried in order.
+ * The first non-null response wins. Only if all three fail does the route
+ * return { polished: null } so the caller renders the deterministic template.
+ *
+ * When the client explicitly picks a model via the UI picker, we honour that
+ * selection with a single-model call (no cascade) — the picker is opt-in.
  *
  * SAFETY
  * ------
@@ -26,7 +32,6 @@
 
 import { NextResponse } from "next/server";
 import {
-    DEFAULT_NIM_MODEL,
     isNimModelId,
     NIM_GENERATION_SETTINGS,
     type NimModelId,
@@ -45,12 +50,15 @@ type AdvisoryRequestBody = {
 };
 
 const NVIDIA_NIM_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const configuredModel = process.env.NVIDIA_NIM_MODEL;
-const NVIDIA_NIM_MODEL = isNimModelId(configuredModel)
-    ? configuredModel
-    : DEFAULT_NIM_MODEL;
 
 const REQUEST_TIMEOUT_MS = 45_000;
+
+// Cascade order: primary → fallback-1 → fallback-2
+const CASCADE_MODELS: NimModelId[] = [
+    "minimaxai/minimax-m3",          // primary   — fastest, most reliable
+    "openai/gpt-oss-120b",           // fallback 1
+    "deepseek-ai/deepseek-v4-flash", // fallback 2
+];
 
 function buildPrompt(body: AdvisoryRequestBody): string {
     return `You are rephrasing an air quality advisory sentence for a dashboard. Rewrite the following facts as ONE natural, plain sentence in ${body.preferredLanguage === "en" ? "English" : `the language with BCP-47 code "${body.preferredLanguage}"`}.
@@ -100,7 +108,7 @@ async function callChatCompletions(
         });
 
         if (!res.ok) {
-            console.error(`[advisory-api] ${url} responded ${res.status}`);
+            console.error(`[advisory-api] ${url} responded ${res.status} for model ${model}`);
             return null;
         }
 
@@ -113,7 +121,7 @@ async function callChatCompletions(
         const firstLine = content.trim().split("\n")[0].trim();
         return firstLine.length > 0 ? firstLine : null;
     } catch (err) {
-        console.error(`[advisory-api] ${url} failed:`, err);
+        console.error(`[advisory-api] ${url} failed for model ${model}:`, err);
         return null;
     } finally {
         clearTimeout(timeout);
@@ -140,39 +148,41 @@ export async function POST(request: Request) {
 
     const preferredLanguage =
         typeof body.preferredLanguage === "string" ? body.preferredLanguage : "en";
-    const selectedModel = body.model ?? NVIDIA_NIM_MODEL;
 
-    if (!isNimModelId(selectedModel)) {
+    // Validate client-supplied model if present
+    const clientModel = body.model;
+    if (clientModel !== undefined && !isNimModelId(clientModel)) {
         return NextResponse.json({ polished: null, reason: "invalid_model" }, { status: 400 });
     }
 
     const prompt = buildPrompt({ ...body, preferredLanguage });
-
     const nvidiaKey = process.env.NVIDIA_NIM_API_KEY;
 
-    if (nvidiaKey) {
-        console.info("[advisory-api] Calling NVIDIA NIM", {
-            model: selectedModel,
-            preferredLanguage,
-        });
-        const polished = await callChatCompletions(
-            NVIDIA_NIM_URL,
-            nvidiaKey,
-            selectedModel,
-            prompt
-        );
-        if (polished) {
-            console.info("[advisory-api] NVIDIA NIM response received", {
-                model: selectedModel,
-            });
-            return NextResponse.json({
-                polished,
-                provider: "nvidia_nim",
-                model: selectedModel,
-            });
-        }
+    if (!nvidiaKey) {
+        return NextResponse.json({ polished: null, reason: "no_provider_succeeded" });
     }
 
-    // NVIDIA NIM failed or is not configured — caller falls back to template.
+    // ── Single-model path (client explicitly picked a model via the picker) ─
+    if (clientModel !== undefined) {
+        console.info("[advisory-api] Single-model call", { model: clientModel, preferredLanguage });
+        const polished = await callChatCompletions(NVIDIA_NIM_URL, nvidiaKey, clientModel, prompt);
+        if (polished) {
+            return NextResponse.json({ polished, provider: "nvidia_nim", model: clientModel });
+        }
+        return NextResponse.json({ polished: null, reason: "no_provider_succeeded" });
+    }
+
+    // ── Cascade path: MiniMax M3 → GPT-OSS 120B → DeepSeek V4 Flash ────────
+    for (const model of CASCADE_MODELS) {
+        console.info("[advisory-api] Cascade attempt", { model, preferredLanguage });
+        const polished = await callChatCompletions(NVIDIA_NIM_URL, nvidiaKey, model, prompt);
+        if (polished) {
+            console.info("[advisory-api] Cascade succeeded", { model });
+            return NextResponse.json({ polished, provider: "nvidia_nim", model });
+        }
+        console.warn("[advisory-api] Model failed, trying next in cascade", { model });
+    }
+
+    // All three models failed — caller renders the deterministic template.
     return NextResponse.json({ polished: null, reason: "no_provider_succeeded" });
 }
