@@ -761,3 +761,57 @@ Two-part request: update landing-page content to reflect the AI chatbot/Hotspot/
 **Result:** render counts for all 5 memoized components were byte-identical before and after the simulated mousemove burst (e.g. `FeaturesSection`: 2 renders both before and after — the 2x is React 19 dev-mode's known double-invoke, unrelated to cursor movement; `LiveAqiStrip`: 4 both times, from its own async data-fetch state update, also unrelated). **Zero additional renders** were caused by 125 mousemove events across any of the 5 sections — confirming the memoization actually works, not just that it compiles.
 
 **Cleanup:** removed all 6 temporary `console.log("[render-count] ...")` lines from the component, deleted the verification script, uninstalled `puppeteer-core` (`git status` confirmed no `package.json`/`package-lock.json` diff afterward), and re-ran `npm run build` for a final clean check.
+## 14. Cross-checked `saanslive-hackathon-upgrade-plan.md` against `openai-codex.md`
+
+User had upgraded the project via a separate agent (Codex) following a 4-phase hackathon plan (`saanslive-hackathon-upgrade-plan.md`: Phase 1 Civic AQI Alert Agent, Phase 4 docs/demo, Phase 3 vernacular advisories, Phase 2 forecast-eval harness) and asked to verify the claimed build log (`openai-codex.md`) against the plan and the actual codebase — not just read the two markdown files against each other.
+
+**Verified against real sources, not just the log's own claims:**
+- `npm run build` — confirmed `/api/agent/run` registered as a real route.
+- `list_tables`/`list_migrations` via Supabase MCP — confirmed `agent_runs` table live, RLS on, migration applied.
+- `get_advisors` (security) — zero lint issues on the new migration.
+- Read `lib/agent/aqiAlertAgent.ts`, `app/api/agent/run/route.ts`, `lib/chatTools.ts`, `AgentActivityLog.tsx`, `HACKATHON.md` in full — not summarized from the log.
+- `git status`/`git log` — confirmed what was actually committed vs. sitting in the working tree.
+
+**Findings:**
+- Phase 1 (Civic AQI Alert Agent) and Phase 4 (docs/demo script) — genuinely built, live in the DB, real code. One undisclosed deviation found: the plan asked the agent's DECIDE/ACT steps to call the NVIDIA NIM cascade for advisory text; what was built is fully deterministic (a 3-branch template), by design (a scheduled job shouldn't depend on LLM availability) — but the log hadn't flagged this as a deviation from the plan's explicit instruction.
+- Phase 3 (vernacular advisories) — overstated in the log. The claim "language preference already respected everywhere" was only true for `AdvisoryPanel`; the chatbot's `SYSTEM_PROMPT` and the agent's advisory text still ignored `preferredLanguage` entirely (verified via grep — zero references in either file).
+- Phase 2 (forecast eval harness) — not started at all: no `model/eval_agent.py`, no `model_evals` table/migration, no `model_health.md`. Plan itself marked this lowest-priority stretch, so absence wasn't a broken promise.
+- Nothing from this upgrade was committed yet; `kiro.md` and `glm.md` showed as deleted (`D`) in `git status`, not committed — flagged since `kiro.md` is the session log the plan itself said to preserve as evidence.
+
+Reported all of this back with a clear "not fully implemented" verdict rather than accepting the log's claims at face value.
+
+## 15. Completed the pending phases (per user instruction: fix but do not commit)
+
+### Phase 3 gap 1 — chatbot and agent language propagation
+
+- `app/api/chat/route.ts`: added `buildSystemPrompt(preferredLanguage)` — names the language (en/hi/ta/bn/mr, matching the onboarding picker) in the system prompt instruction while keeping the "always call a tool, never invent a number" rule unconditional in every language.
+- `components/AqiChatbot.tsx`: now reads `usePreferences()` and sends `preferredLanguage` on every `/api/chat` call.
+- `lib/agent/advisoryText.ts` (new): since the Civic AQI Alert Agent is deliberately LLM-free (a scheduled job shouldn't depend on an external API), added a hand-written translation table for the 3 fixed alert levels across the 5 languages. `AgentActivityLog.tsx` now renders the viewer's preferred-language advisory via this table while `agent_runs.advisories` keeps storing the objective English record in the DB.
+- **Real verification:** started the local dev server, made an actual `POST /api/chat` request with `preferredLanguage: "hi"` asking "What is the current AQI in Delhi?" — got back a genuine Hindi reply with the tool's real numbers preserved exactly (R K Puram — AQI 59.2, Anand Vihar — AQI 92.85), only the prose translated. A follow-up English-default call regressed correctly. `npm run build` clean.
+
+### Phase 3 gap 2 — AdvisoryPanel's offline fallback was still English-only
+
+Re-read the plan's own wording and found a second, deeper gap: the plan explicitly required the *fallback* template (shown when the LLM cascade is unreachable) to have real per-language strings, "don't cascade-translate a fallback path." `AdvisoryPanel.tsx`'s fallback sentence was hardcoded English regardless of `preferredLanguage`.
+
+- `lib/advisoryFallbackText.ts` (new): hand-written translations for the 6 AQI band labels, 3 vulnerability-flag labels, the generic/no-flags guidance clause, and a tokenized sentence template (`{categoryValue}`/`{station}`/`{time}`/`{guidance}`) across hi/ta/bn/mr. Returns `null` for `"en"` so the English path is untouched.
+- `AdvisoryPanel.tsx`: fallback JSX now parses the language's token template and re-inserts the same bold/colored spans the English path already uses for station/time/value.
+- **Real verification:** ran a standalone `npx tsx` script importing the actual functions with real inputs for all 5 languages — confirmed `en` returns `null` (unchanged) and each of hi/ta/bn/mr produces a correctly-ordered, non-empty translated sentence, including correct multi-flag "and" joining per language.
+
+### Phase 2 — forecast eval / self-review harness (previously entirely unstarted)
+
+- New migration `supabase/migrations/20260723065247_create_model_evals.sql`: `model_evals` table, unique constraint on (station_id, forecast_at, model_version, horizon_hours) as the idempotent conflict target, RLS on, public read, service-role write — applied live, `get_advisors` clean.
+- New `model/eval_agent.py`: matches every past-due, un-evaluated forecast to the actual reading closest to `forecast_at` (±90min tolerance, same as `features.py`) and to the persistence-baseline reading closest to when the forecast was made; computes both absolute errors; builds a rolling per-city summary (median error, win rate) and flags "retrain candidate" cities that lost to baseline on every one of their last N evals; writes `model/model_health.md`.
+- **Bug found and fixed by actually running it:** first real run failed with `operator does not exist: uuid = text` — fixed by casting the DB column to text on the comparison's left side instead of trying to cast the bound array parameter inline (which breaks SQLAlchemy's `:param` syntax).
+- **Real verification against the live DB:** `--dry-run` found 145 due forecasts, matched 121 to real readings, honestly skipped 24 (no actual reading yet — not fabricated). Real run inserted 121 rows, confirmed via direct SQL (54 real model wins). Re-ran immediately after — zero re-processing of already-evaluated rows, confirming the idempotent `ON CONFLICT DO NOTHING` actually works.
+- Wired into `.github/workflows/ingest.yml` as a new step after `run_ingestion.py`, with `continue-on-error: true` matching the existing per-step fault-isolation philosophy.
+- New `components/ModelHealthPanel.tsx` + `getModelHealthSummary()` in `lib/data.ts`, added to `/about`. **Real verification:** loaded `/about` in headless Edge via `puppeteer-core` (dev-only, removed after) and confirmed the panel renders all 18 cities with real numbers fetched live from Supabase in the browser, matching the Python script's independently-computed numbers.
+- Updated `openai-codex.md` with dated corrections describing exactly what was missing and what was fixed, plus a full Phase 2 build log, rather than leaving the earlier overstated claims uncorrected.
+
+## 16. Four targeted fixes (diffs shown and confirmed before applying; nothing committed)
+
+1. **README.md** — added the two required GitHub Actions repository secrets, `AGENT_RUN_URL` and `AGENT_RUN_TOKEN`, to the existing "Required Secrets" table (the frontend env-var documentation for `SUPABASE_SERVICE_ROLE_KEY`/`AGENT_RUN_TOKEN` with explicit "never `NEXT_PUBLIC_`" notes was already present from an earlier pass).
+2. **Demo script reconciliation** — folded `saanslive_demo_script.md`'s strongest lines (the premature-deaths opening hook, the "See through the smog" closing tagline) into `HACKATHON.md`'s already-current "Three-minute demo flow" (steps 1 and 8 reworded, same timestamps, total runtime still 3:00), then deleted `saanslive_demo_script.md` so there's one source of truth.
+3. **`app/api/agent/run/route.ts`** — replaced the in-memory `globalThis` cooldown/concurrency guard with a DB-backed check (`checkRecentRunGuard()`): queries `agent_runs` for the most recent row's `created_at` and rejects a manual run with 429 if one happened within the last 60 seconds. This holds correctly across multiple concurrent Vercel serverless instances, since an in-memory flag only ever protected against bursts landing on the same warm instance. The old separate "already in progress" 409 case was folded into the same 60s window check, since a run that just started (finished or not) already blocks a new one — a stronger guarantee than trying to detect "in progress" across instances without a dedicated lock table.
+4. **`supabase/migrations/20260723055612_create_agent_runs.sql`** — removed the stray `-- database: :memory:` comment at the top of the file (a leftover from local testing that had no purpose in the actual migration).
+
+Verified: `npm run build` passes cleanly with the new guard logic; `get_diagnostics` clean on the modified route. Confirmed via `.env.local` that `SUPABASE_SERVICE_ROLE_KEY`/`AGENT_RUN_TOKEN` are present locally for the DB-backed guard to authenticate with. Attempted a live end-to-end HTTP test of the new guard (real `POST /api/agent/run` against a local dev server) but was blocked by a leftover dev-server process already bound to port 3000 from an earlier session; killed the stray process but did not re-run the live test before this task ended — the fix is code-verified (build + diagnostics clean, logic matches the confirmed diff) but not yet confirmed with a live HTTP round-trip in this session.

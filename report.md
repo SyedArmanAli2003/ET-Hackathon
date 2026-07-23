@@ -218,7 +218,6 @@ All 5 tables: `id UUID DEFAULT gen_random_uuid()` confirmed.
 **Conclusion:** Zero regressions. All original checks still pass, and the new idempotent ingestion constraints are live and verified.
 
 ---
-
 ## Live-Test Confirmations & Corrections
 
 ### Fix 1 — `ON CONFLICT` Syntax for Partial Index ✅
@@ -1343,7 +1342,8 @@ Error: Process completed with exit code 1.
 
 > **Timestamp:** 2026-07-08 07:00 UTC
 
-Confirmed: model/predict.py is **already integrated** as Step 4 in un_ingestion.py (lines 223–301). It was added in an earlier session. No changes needed.
+Confirmed: model/predict.py is **already integrated** as Step 4 in 
+un_ingestion.py (lines 223–301). It was added in an earlier session. No changes needed.
 
 **Fault-isolation contract:**
 - predict is imported lazily inside the 	ry block, so a missing xgboost/lightgbm install never breaks Steps 1–3.
@@ -1400,7 +1400,8 @@ Return shapes are **identical to the mock** — zero downstream component change
 
 | Layer | Value | Source |
 |-------|-------|--------|
-| Raw reading | aqi=59.33, pm25=16.06, ts=2026-07-08 04:30 UTC | eadings table, data_source=openaq-v3 |
+| Raw reading | aqi=59.33, pm25=16.06, ts=2026-07-08 04:30 UTC | 
+eadings table, data_source=openaq-v3 |
 | Forecast row | predicted_aqi=58.64, model_version=xgb-v1.0, horizon=6h, model_rmse=1.71 | orecasts table, created 2026-07-01 13:01 UTC |
 | Dashboard display | Current AQI: 59.33, Advisory: *"Moderate (59) near BTM Layout"* | /dashboard page |
 

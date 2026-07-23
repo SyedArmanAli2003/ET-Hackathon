@@ -145,6 +145,8 @@ npm install
 # NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
 # NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_...
 # NVIDIA_NIM_API_KEY=...          (server-only — powers chatbot + advisory rephrasing)
+# SUPABASE_SERVICE_ROLE_KEY=...   (server-only — NEVER prefix with NEXT_PUBLIC_; powers the Civic AQI Alert Agent's writes to agent_runs)
+# AGENT_RUN_TOKEN=...             (server-only — NEVER prefix with NEXT_PUBLIC_; shared secret that authorizes scheduled agent runs)
 npm run dev
 # Open http://localhost:3000
 ```
@@ -191,6 +193,8 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 |--------|-------|
 | `SUPABASE_DB_URL` | `postgresql://postgres.<ref>:<password>@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres` |
 | `OPENAQ_API_KEY` | Your OpenAQ v3 API key |
+| `AGENT_RUN_URL` | The deployed `/api/agent/run` endpoint, e.g. `https://saanslive.vercel.app/api/agent/run` — used by `.github/workflows/agent.yml` to trigger scheduled Civic AQI Alert Agent runs |
+| `AGENT_RUN_TOKEN` | Shared secret matching the server-side `AGENT_RUN_TOKEN` env var on the deployment — sent as the `x-agent-run-token` header so scheduled runs bypass the manual-run cooldown; must match exactly or the request is rejected with 401 |
 
 > ⚠️ **Region matters:** The pooler hostname must match your project region. This project uses `ap-southeast-1` (Singapore) → `aws-1-ap-southeast-1.pooler.supabase.com`. Using the wrong region causes every run to fail with `ENOTFOUND`.
 

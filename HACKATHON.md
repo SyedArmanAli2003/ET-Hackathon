@@ -45,14 +45,14 @@ Next.js dashboard -> forecast, action plan, transparency, hotspot, comparison, c
 
 ## Three-minute demo flow
 
-1. **0:00-0:20 - Problem and promise.** Open the landing page: SaanSLive helps people plan outdoor time before air quality changes.
-2. **0:20-0:50 - Live, hyperlocal context.** Open Dashboard, select a city/station (or allow location access), and point out the current AQI and forecast.
+1. **0:00-0:15 - Hook.** Open the landing page. "Every year, air pollution contributes to over a million and a half premature deaths in India. Existing tools tell you today's AQI. SaanSLive tells you what it'll be in the next few hours — and what to actually do about it."
+2. **0:15-0:50 - Live, hyperlocal context.** Open Dashboard, select a city/station (or allow location access), and point out the current AQI and forecast.
 3. **0:50-1:35 - The differentiator.** In *Personal air action plan*, switch between Commute, Outdoor workout, School run, and Delivery. Show that the recommendation, best available window, and threshold explanation change from the same real forecast.
 4. **1:35-1:55 - Trust, not black-box AI.** Show *Forecast transparency*: latest sensor time, model-run time, forecast count, and model RMSE versus the persistence baseline.
 5. **1:55-2:25 - Agentic centerpiece.** Open *Civic Alert Agent*, click **Run Agent Now**, and expand the resulting trace: plan, published threshold decision, alerts, and prior-run self-review.
 6. **2:25-2:40 - Public-health operations view.** Open Hotspot Prioritization and explain its transparent AQI + seven-day trend score.
 7. **2:40-2:52 - Grounded AI.** Ask the assistant whether there are alerts; point out the visible live-data tool badge and the agent-backed answer.
-8. **2:52-3:00 - Codex evidence.** Show the public repository's commit history, this guide, and `report.md` / `openai-codex.md` as the engineering and agentic-work record.
+8. **2:52-3:00 - Close.** "SaanSLive. See through the smog — before it happens." Briefly show the public repository's commit history and `openai-codex.md` as the engineering record.
 
 ## Submission checklist
 
