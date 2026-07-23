@@ -4,13 +4,18 @@
 
 **SaanSLive** is a real-time air quality monitoring and 6-hour AQI forecasting system for 20 major Indian cities (53 monitoring stations). It ingests live PM2.5 readings from [OpenAQ](https://openaq.org), enriches them with weather data from [Open-Meteo](https://open-meteo.com), trains per-city XGBoost/LightGBM models, and serves forecasts, city-level comparisons, and a transparent hotspot-prioritization ranking on a Next.js dashboard — plus an AI chatbot and AI-polished health advisories, all grounded in real Supabase queries.
 
+**Hackathon track:** AI for Societal Good. The project now includes a transparent, personalized **Air Action Plan** for commutes, outdoor workouts, school runs, and delivery shifts, plus live data/model freshness and baseline-validation context. See [HACKATHON.md](./HACKATHON.md) for the project description, three-minute demo flow, and submission checklist.
+
 ---
 
 ## Live Dashboard
 
-Served at `/dashboard` (three tabs, one route — no fragmented pages):
+Served at `/dashboard` (four tabs, one route — no fragmented pages):
 
 - **Overview** — interactive Leaflet map with 53 station markers colored by real-time AQI band, city selector, 24h forecast chart (model prediction vs. persistence baseline, dashed), and an AI-polished health advisory panel.
+- **Personal Air Action Plan** — turns the selected station's real forecast into a transparent, activity-specific plan for a commute, workout, school run, or delivery shift. The user can copy the plan, see the best available forecast window, and inspect the exact threshold/sensitivity adjustment behind the recommendation.
+- **Forecast Transparency** — shows the age of the underlying sensor reading and model run, number of forecast points, and stored model RMSE versus the no-change persistence baseline. Older and missing data stay visible rather than being presented as fresh AI output.
+- **Civic AQI Alert Agent** — an auditable proactive run that plans from current readings and forecasts, applies published thresholds, writes station advisories, and self-reviews the prior run against the next observed AQI. Every decision is visible in an expandable activity log.
 - **Hotspot Prioritization** — ranks every station across every city by urgency, using only real numbers from `readings`: current AQI severity (60% weight) + 7-day trend vs the prior week (40% weight). Both components are shown separately, not just a combined score, so the ranking is auditable. Carries an explicit disclaimer that it is *not* based on registered pollution-source data — that data doesn't exist in this schema.
 - **Compare Cities** — current AQI vs next-24h forecast, averaged across all of a city's stations, side-by-side as a sortable table or a Recharts bar chart. Cities where no station has a trained model yet show "Forecast pending" — never a fabricated number.
 
@@ -31,7 +36,7 @@ model/predict.py ◄────────────────────
       └──► forecasts table ──► frontend/saanslive (Next.js 16)
                                       │
                                       ├─► lib/data.ts ──► dashboard tabs
-                                      │      (Overview / Hotspot / Compare)
+                                      │      (Overview / Civic Alert Agent / Hotspot / Compare)
                                       │
                                       └─► lib/chatTools.ts ──► AI chatbot
                                              + app/api/advisory ──► AI advisory
@@ -62,6 +67,7 @@ ET-Hackathon/
 │
 ├── .github/workflows/
 │   └── ingest.yml                    # Cron every 5h + manual dispatch
+│   └── agent.yml                     # Scheduled Civic AQI Alert Agent trigger
 │
 ├── ingestion/
 │   ├── config.py                     # 20 tracked Indian cities with lat/lng
@@ -95,8 +101,11 @@ ET-Hackathon/
     │   ├── generateAdvisory.ts       # Client-side template + calls /api/advisory to polish it
     │   ├── nimModels.ts               # NVIDIA NIM model registry, default selection, settings
     │   ├── geolocation.ts             # Browser geolocation → nearest-station lookup
-    │   ├── localPreferences.ts        # Per-device onboarding preferences (localStorage)
-    │   └── supabaseClient.ts          # Single shared Supabase client instance
+│   ├── localPreferences.ts        # Per-device onboarding preferences (localStorage)
+│   └── supabaseClient.ts          # Single shared Supabase client instance
+│   └── agent/
+│       ├── aqiAlertAgent.ts        # Server-side plan → decide → alert → self-review loop
+│       └── types.ts                # Shared agent-run types
     ├── components/
     │   ├── HeroSection.tsx           # Landing hero (canvas-free cursor-reveal effect)
     │   ├── StationMap.tsx            # Leaflet map with live AQI markers
@@ -105,8 +114,9 @@ ET-Hackathon/
     │   ├── HotspotPanel.tsx          # "Hotspot Prioritization" ranked table + disclaimer
     │   ├── CityComparisonView.tsx    # "Compare Cities" sortable table / bar chart toggle
     │   ├── AqiChatbot.tsx            # Floating tool-calling AI chatbot
-    │   ├── OnboardingModal.tsx       # First-visit personalization modal
-    │   └── Skeleton.tsx              # Shared loading placeholders
+│   ├── OnboardingModal.tsx       # First-visit personalization modal
+│   ├── AgentActivityLog.tsx       # Expandable public agent-run timeline
+│   └── Skeleton.tsx              # Shared loading placeholders
     └── app/
         ├── page.tsx                  # Homepage — hero only
         ├── about/page.tsx            # About page
@@ -195,8 +205,9 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 | `weather` | 17,099 | Hourly temperature, wind, humidity |
 | `forecasts` | 145 | XGBoost 6h AQI predictions |
 | `user_profiles` | 0 | Per-Supabase-Auth-user onboarding preferences (reserved) |
+| `agent_runs` | — | Public, read-only audit trail for Civic AQI Alert Agent runs |
 
-All tables have RLS enabled. Sensor tables (`stations`, `readings`, `weather`, `forecasts`) are publicly readable via the anon key. Write access is restricted to `service_role` (ingestion pipeline only). A dedicated Postgres function, `get_hotspot_ranking_stats()` (`SECURITY INVOKER`, `search_path` locked), computes current/weekly AQI aggregates server-side for the Hotspot Prioritization tab and is `GRANT EXECUTE`'d to `anon`/`authenticated`.
+All tables have RLS enabled. Sensor tables (`stations`, `readings`, `weather`, `forecasts`) and the auditable `agent_runs` log are publicly readable via the anon key. Write access to `agent_runs` is restricted to the server-side `service_role`; it is never exposed to the browser. A dedicated Postgres function, `get_hotspot_ranking_stats()` (`SECURITY INVOKER`, `search_path` locked), computes current/weekly AQI aggregates server-side for the Hotspot Prioritization tab and is `GRANT EXECUTE`'d to `anon`/`authenticated`.
 
 Of the 20 tracked cities, **18 currently have live readings/forecasts**; **Kochi** and **Visakhapatnam** have zero ingested readings so far (a data-availability gap, not a modeling one) — both are excluded from `train.py` before training even starts, and the dashboard shows "Forecast pending" for them honestly rather than fabricating a value.
 

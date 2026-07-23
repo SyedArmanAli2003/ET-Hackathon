@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { MessageCircle, X, Send, Wrench } from "lucide-react";
+import { usePreferences } from "../lib/localPreferences";
 
 type ChatRole = "user" | "assistant";
 
@@ -44,6 +45,9 @@ export default function AqiChatbot() {
     const [sending, setSending] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
+    // Same locally-stored preference AdvisoryPanel already uses -- the
+    // chatbot's replies should respect it too, not just one panel.
+    const { preferences } = usePreferences();
 
     useEffect(() => {
         scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -65,6 +69,7 @@ export default function AqiChatbot() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+                    preferredLanguage: preferences.preferred_language,
                 }),
             });
 

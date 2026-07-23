@@ -11,6 +11,45 @@
  */
 
 import { supabase } from "./supabaseClient";
+import type {
+  AgentRun,
+  AgentSelfReview,
+  AgentTrigger,
+  AgentReasoningStep,
+  FlaggedStation,
+} from "./agent/types";
+
+type AgentRunRow = {
+  id: string;
+  created_at: string;
+  trigger: string;
+  reasoning_steps: unknown;
+  flagged_stations: unknown;
+  advisories: unknown;
+  self_review: unknown;
+};
+
+function toAgentRun(row: AgentRunRow): AgentRun {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    trigger: row.trigger === "scheduled" ? "scheduled" : "manual" as AgentTrigger,
+    reasoningSteps: Array.isArray(row.reasoning_steps)
+      ? row.reasoning_steps as AgentReasoningStep[]
+      : [],
+    flaggedStations: Array.isArray(row.flagged_stations)
+      ? row.flagged_stations as FlaggedStation[]
+      : [],
+    advisories:
+      row.advisories && typeof row.advisories === "object" && !Array.isArray(row.advisories)
+        ? row.advisories as Record<string, string>
+        : {},
+    selfReview:
+      row.self_review && typeof row.self_review === "object" && !Array.isArray(row.self_review)
+        ? row.self_review as AgentSelfReview
+        : null,
+  };
+}
 
 // =============================================================================
 // TypeScript interfaces — mirror the Supabase table schemas exactly
@@ -476,4 +515,115 @@ export async function getCityComparison(): Promise<CityComparisonEntry[]> {
   entries.sort((a, b) => a.city.localeCompare(b.city));
 
   return entries;
+}
+
+// =============================================================================
+// Civic AQI Alert Agent
+// =============================================================================
+
+/**
+ * Return the most recent agent runs. The table is deliberately public-read so
+ * visitors can inspect the same decision trace that produced a civic alert.
+ */
+export async function getRecentAgentRuns(limit = 10): Promise<AgentRun[]> {
+  const { data, error } = await supabase
+    .from("agent_runs")
+    .select("id, created_at, trigger, reasoning_steps, flagged_stations, advisories, self_review")
+    .order("created_at", { ascending: false })
+    .limit(Math.min(Math.max(limit, 1), 20));
+
+  if (error) {
+    console.error("[getRecentAgentRuns] Supabase error:", error.message);
+    throw new Error("Failed to load the Civic AQI Alert Agent log. Please try again.");
+  }
+
+  return ((data ?? []) as AgentRunRow[]).map(toAgentRun);
+}
+
+// =============================================================================
+// Model Health (forecast evaluation vs. persistence baseline)
+// =============================================================================
+
+/** Raw row shape from public.model_evals, joined to stations for the city name. */
+type ModelEvalRow = {
+  city: string;
+  model_abs_error: string | number;
+  baseline_abs_error: string | number;
+  model_beat_baseline: boolean;
+};
+
+/**
+ * One city's rolling forecast-accuracy summary, computed client-side from
+ * the most recent model_evals rows for that city — same median-error /
+ * win-rate computation model/eval_agent.py already does server-side, kept
+ * consistent so the dashboard and the CLI report the same numbers.
+ */
+export interface ModelHealthSummary {
+  city: string;
+  evalCount: number;
+  medianModelError: number;
+  medianBaselineError: number;
+  modelWinRatePct: number;
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+/**
+ * Return a per-city rolling summary of real forecast accuracy vs. the
+ * persistence baseline, computed from public.model_evals (populated by
+ * model/eval_agent.py — see .github/workflows/ingest.yml). This is a
+ * read-only surface: it never fabricates a number when no evals exist yet
+ * for a city, it simply omits that city from the result.
+ *
+ * `perCityLimit` caps how many of each city's most recent evals feed the
+ * summary, matching eval_agent.py's own rolling-window default (20).
+ */
+export async function getModelHealthSummary(perCityLimit = 20): Promise<ModelHealthSummary[]> {
+  const { data, error } = await supabase
+    .from("model_evals")
+    .select("station_id, model_abs_error, baseline_abs_error, model_beat_baseline, evaluated_at, stations(city)")
+    .order("evaluated_at", { ascending: false })
+    .limit(500);
+
+  if (error) {
+    console.error("[getModelHealthSummary] Supabase error:", error.message);
+    throw new Error("Failed to load model health data. Please try again.");
+  }
+
+  type JoinedRow = ModelEvalRow & { stations: { city: string } | { city: string }[] | null };
+  const rows = (data ?? []) as unknown as JoinedRow[];
+
+  const byCity = new Map<string, { modelErrors: number[]; baselineErrors: number[]; wins: number; total: number }>();
+
+  for (const row of rows) {
+    const cityValue = Array.isArray(row.stations) ? row.stations[0]?.city : row.stations?.city;
+    if (!cityValue) continue;
+
+    if (!byCity.has(cityValue)) {
+      byCity.set(cityValue, { modelErrors: [], baselineErrors: [], wins: 0, total: 0 });
+    }
+    const agg = byCity.get(cityValue)!;
+    if (agg.total >= perCityLimit) continue; // rows already ordered newest-first
+
+    agg.modelErrors.push(Number(row.model_abs_error));
+    agg.baselineErrors.push(Number(row.baseline_abs_error));
+    if (row.model_beat_baseline) agg.wins += 1;
+    agg.total += 1;
+  }
+
+  const summaries: ModelHealthSummary[] = Array.from(byCity.entries()).map(([city, agg]) => ({
+    city,
+    evalCount: agg.total,
+    medianModelError: Math.round(median(agg.modelErrors) * 100) / 100,
+    medianBaselineError: Math.round(median(agg.baselineErrors) * 100) / 100,
+    modelWinRatePct: Math.round((agg.wins / agg.total) * 1000) / 10,
+  }));
+
+  summaries.sort((a, b) => a.modelWinRatePct - b.modelWinRatePct);
+  return summaries;
 }

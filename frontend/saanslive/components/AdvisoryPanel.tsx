@@ -11,6 +11,11 @@ import {
     NIM_MODELS,
     type NimModelId,
 } from "../lib/nimModels";
+import {
+    parseFallbackAdvisorySentence,
+    translateAqiBandLabel,
+    translateGuidanceClause,
+} from "../lib/advisoryFallbackText";
 
 export type AdvisoryPanelProps = {
     station: Station;
@@ -98,7 +103,16 @@ export default function AdvisoryPanel({
     const [polishing, setPolishing] = useState(false);
     const [selectedModel, setSelectedModel] = useState<NimModelId>(DEFAULT_NIM_MODEL);
 
+    // English guidance clause -- fed to the LLM cascade as a FACT to rephrase
+    // into preferredLanguage (see buildPrompt() in app/api/advisory/route.ts).
+    // The LLM does the translation for the polished path; it is NOT used
+    // directly in the fallback JSX below when preferredLanguage isn't "en".
     const guidanceClause = buildGuidanceClause(vulnerabilityFlags);
+
+    // Hand-written, non-English guidance clause for the deterministic
+    // fallback sentence -- used only when polishedText is null AND the
+    // language isn't English (see the fallback JSX below).
+    const localizedGuidanceClause = translateGuidanceClause(vulnerabilityFlags, preferredLanguage);
 
     useEffect(() => {
         setPolishedText(null);
@@ -196,13 +210,55 @@ export default function AdvisoryPanel({
                         <div className="text-white text-sm leading-relaxed">{polishedText}</div>
                     ) : (
                         <div className="text-white text-sm leading-relaxed">
-                            AQI is expected to reach{" "}
-                            <span style={{ color: advisory.band.color, fontWeight: 700 }}>
-                                '{advisory.band.label}' ({advisory.value})
-                            </span>{" "}
-                            near <span style={{ fontWeight: 700 }}>{station.name}</span> by{" "}
-                            <span style={{ fontWeight: 700 }}>{advisory.time}</span> —{" "}
-                            {guidanceClause}.
+                            {(() => {
+                                // Deterministic fallback: the LLM cascade is
+                                // unreachable, still loading, or returned
+                                // nothing. preferredLanguage must still be
+                                // respected here -- a hand-written template
+                                // per language (see lib/advisoryFallbackText.ts),
+                                // never a runtime translation of the English
+                                // copy. English keeps its existing JSX exactly
+                                // as before.
+                                const segments = parseFallbackAdvisorySentence(preferredLanguage);
+                                const categoryValueSpan = (
+                                    <span style={{ color: advisory.band.color, fontWeight: 700 }}>
+                                        '{translateAqiBandLabel(advisory.band.label, preferredLanguage)}' ({advisory.value})
+                                    </span>
+                                );
+
+                                if (!segments) {
+                                    return (
+                                        <>
+                                            AQI is expected to reach{" "}
+                                            {categoryValueSpan}{" "}
+                                            near <span style={{ fontWeight: 700 }}>{station.name}</span> by{" "}
+                                            <span style={{ fontWeight: 700 }}>{advisory.time}</span> —{" "}
+                                            {guidanceClause}.
+                                        </>
+                                    );
+                                }
+
+                                return segments.map((segment, i) => {
+                                    if (segment.type === "text") return <React.Fragment key={i}>{segment.text}</React.Fragment>;
+                                    if (segment.type === "categoryValue") return <React.Fragment key={i}>{categoryValueSpan}</React.Fragment>;
+                                    if (segment.type === "station") {
+                                        return (
+                                            <span key={i} style={{ fontWeight: 700 }}>
+                                                {station.name}
+                                            </span>
+                                        );
+                                    }
+                                    if (segment.type === "time") {
+                                        return (
+                                            <span key={i} style={{ fontWeight: 700 }}>
+                                                {advisory.time}
+                                            </span>
+                                        );
+                                    }
+                                    // segment.type === "guidance"
+                                    return <React.Fragment key={i}>{localizedGuidanceClause}</React.Fragment>;
+                                });
+                            })()}
                         </div>
                     )}
                     {polishing ? (

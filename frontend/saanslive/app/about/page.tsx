@@ -1,4 +1,5 @@
 import Link from "next/link";
+import ModelHealthPanel from "../../components/ModelHealthPanel";
 
 export const metadata = {
     title: "About — SaanSLive",
@@ -74,6 +75,11 @@ export default function AboutPage() {
                             </ul>
                         </div>
                     ))}
+                </div>
+
+                <h2 className="text-2xl font-semibold mb-4">Model health</h2>
+                <div className="mb-10">
+                    <ModelHealthPanel />
                 </div>
 
                 <h2 className="text-2xl font-semibold mb-4">Team</h2>

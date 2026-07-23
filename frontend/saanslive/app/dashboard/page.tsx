@@ -19,6 +19,9 @@ const StationMap = dynamic(
 
 import ForecastChart from "../../components/ForecastChart";
 import AdvisoryPanel from "../../components/AdvisoryPanel";
+import AirPlanPanel from "../../components/AirPlanPanel";
+import ForecastTrustPanel from "../../components/ForecastTrustPanel";
+import AgentActivityLog from "../../components/AgentActivityLog";
 import HotspotPanel from "../../components/HotspotPanel";
 import CityComparisonView from "../../components/CityComparisonView";
 import OnboardingModal from "../../components/OnboardingModal";
@@ -28,7 +31,7 @@ import { findNearestStation, requestGeolocation } from "../../lib/geolocation";
 const darkBgCard =
     "bg-black/70 border border-white/10 rounded-2xl p-4 backdrop-blur-md";
 
-type DashboardTab = "overview" | "hotspots" | "compare";
+type DashboardTab = "overview" | "hotspots" | "compare" | "agent";
 
 export default function DashboardPage() {
     const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
@@ -221,6 +224,7 @@ export default function DashboardPage() {
                     {(
                         [
                             { id: "overview" as const, label: "Overview" },
+                            { id: "agent" as const, label: "Civic Alert Agent" },
                             { id: "hotspots" as const, label: "Hotspot Prioritization" },
                             { id: "compare" as const, label: "Compare Cities" },
                         ]
@@ -312,10 +316,28 @@ export default function DashboardPage() {
                             </div>
                         </div>
 
+                        <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                            <AirPlanPanel
+                                station={selectedStation}
+                                currentReading={currentReading}
+                                forecasts={forecasts}
+                                vulnerabilityFlags={preferences.vulnerability_flags}
+                                loading={stationDataLoading}
+                            />
+                            <ForecastTrustPanel
+                                station={selectedStation}
+                                currentReading={currentReading}
+                                forecasts={forecasts}
+                                loading={stationDataLoading}
+                            />
+                        </div>
+
                         {loading ? (
                             <div className="mt-4 text-white/60 text-sm">Loading data…</div>
                         ) : null}
                     </>
+                ) : activeTab === "agent" ? (
+                    <AgentActivityLog />
                 ) : activeTab === "hotspots" ? (
                     <HotspotPanel />
                 ) : (

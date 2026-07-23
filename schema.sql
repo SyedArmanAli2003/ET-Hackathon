@@ -199,6 +199,24 @@ CREATE INDEX idx_user_profiles_preferred_station
 
 
 -- =============================================================================
+-- 6. AGENT_RUNS
+--    Public, auditable records emitted by the Civic AQI Alert Agent.
+--    Users may read the decision trace; only a server-side service role writes.
+-- =============================================================================
+CREATE TABLE agent_runs (
+    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    trigger          TEXT        NOT NULL CHECK (trigger IN ('manual', 'scheduled')),
+    reasoning_steps  JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    flagged_stations JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    advisories       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    self_review      JSONB
+);
+
+CREATE INDEX idx_agent_runs_created_at ON agent_runs (created_at DESC);
+
+
+-- =============================================================================
 -- 6. ROW-LEVEL SECURITY  (defense-in-depth for the Supabase Data API)
 --    All tables are exposed to the Supabase REST/GraphQL API, so RLS prevents
 --    unauthorised access if the anon key is compromised.
@@ -212,6 +230,7 @@ ALTER TABLE readings       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE weather        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE forecasts      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_profiles  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_runs     ENABLE ROW LEVEL SECURITY;
 
 -- ── Stations: public reference data — anyone can read; only service_role writes
 CREATE POLICY "stations_select_anon" ON stations
@@ -271,3 +290,13 @@ CREATE POLICY "user_profiles_update_own" ON user_profiles
 -- Anonymous auth user deletion via auth.users CASCADE handles normal self-deletion.
 CREATE POLICY "user_profiles_delete_service" ON user_profiles
     FOR DELETE TO service_role USING (true);
+
+-- ── Agent runs: public audit trail; no browser writes ────────────────────────
+GRANT SELECT ON TABLE agent_runs TO anon, authenticated;
+GRANT ALL ON TABLE agent_runs TO service_role;
+
+CREATE POLICY "agent_runs_select_anon" ON agent_runs
+    FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "agent_runs_service_write" ON agent_runs
+    FOR ALL TO service_role USING (true) WITH CHECK (true);

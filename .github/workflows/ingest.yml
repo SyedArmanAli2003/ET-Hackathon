@@ -125,6 +125,23 @@ jobs:
           OPENAQ_API_KEY:  ${{ secrets.OPENAQ_API_KEY }}
           LOG_LEVEL: INFO
 
+      # ── 7b. Evaluate past forecasts against real outcomes ───────────────────
+      # Runs after predict.py's forecasts step so this cycle's new forecasts
+      # are already written -- eval_agent.py only evaluates forecasts whose
+      # forecast_at has ALREADY passed, so it typically evaluates forecasts
+      # from earlier cycles, not the ones just inserted above.
+      # `continue-on-error: true` fault-isolates this step the same way
+      # run_ingestion.py isolates its own four steps from each other: a
+      # failure here (e.g. a transient DB hiccup) must never mark the whole
+      # ingestion job as failed, since the actual sensor/forecast data this
+      # workflow exists to fetch already landed successfully in step 7.
+      - name: Evaluate forecasts vs. real outcomes
+        continue-on-error: true
+        run: python model/eval_agent.py
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          LOG_LEVEL: INFO
+
       # ── 8. Upload logs on failure ─────────────────────────────────────────
       # If the pipeline exits 1 (a step failed), capture the runner logs so
       # you can download them from the Actions UI without re-running.

@@ -95,13 +95,26 @@ export const CHAT_TOOLS = [
             },
         },
     },
+    {
+        type: "function" as const,
+        function: {
+            name: "get_recent_alerts",
+            description:
+                "Get the most recent Civic AQI Alert Agent result, including real flagged stations and its alert reasons. Use this when the user asks whether there are any alerts right now.",
+            parameters: {
+                type: "object",
+                properties: {},
+            },
+        },
+    },
 ];
 
 export type ChatToolName =
     | "list_stations"
     | "get_current_aqi"
     | "get_forecast"
-    | "compare_cities_aqi";
+    | "compare_cities_aqi"
+    | "get_recent_alerts";
 
 // =============================================================================
 // Tool implementations — every one hits the real Supabase tables
@@ -218,6 +231,37 @@ async function compareCitiesAqi(args: { cities: string[] }) {
     return { comparison: results };
 }
 
+async function getRecentAlerts() {
+    const { data, error } = await supabase
+        .from("agent_runs")
+        .select("created_at, trigger, flagged_stations, self_review")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+    if (error) return { error: error.message };
+    if (!data) return { note: "The Civic AQI Alert Agent has not run yet." };
+
+    const flags = Array.isArray(data.flagged_stations) ? data.flagged_stations : [];
+    return {
+        run_at: data.created_at,
+        trigger: data.trigger,
+        flagged_count: flags.length,
+        alerts: flags.slice(0, 8).map((flag) => {
+            const item = flag as Record<string, unknown>;
+            return {
+                city: item.city,
+                station: item.stationName,
+                current_aqi: item.currentAqi,
+                forecast_aqi: item.forecastAqi,
+                alert_level: item.alertLevel,
+                reason: item.reason,
+            };
+        }),
+        self_review_available: data.self_review != null,
+    };
+}
+
 /** Dispatch a tool call by name. Never throws -- returns { error } on failure. */
 export async function runChatTool(
     name: string,
@@ -233,6 +277,8 @@ export async function runChatTool(
                 return await getForecast(args as { city_or_station: string });
             case "compare_cities_aqi":
                 return await compareCitiesAqi(args as { cities: string[] });
+            case "get_recent_alerts":
+                return await getRecentAlerts();
             default:
                 return { error: `Unknown tool: ${name}` };
         }
